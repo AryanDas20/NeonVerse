@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#080b16">
+  <meta name="description" content="NeonVerse — one connected space for university life, hostel operations and campus communities.">
+  <title>NeonVerse — Your Campus, Connected</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+  <script type="module" src="script.js"></script>
+</head>
+<body>
+  <div class="ambient ambient-one"></div><div class="ambient ambient-two"></div>
+  <div id="toast-root" aria-live="polite"></div>
+
+  <main id="landing" class="landing">
+    <nav class="topnav">
+      <a class="brand" href="#"><span class="brand-mark">N</span><span>NEON<span class="brand-accent">VERSE</span></span></a>
+      <div class="nav-links"><a href="#ecosystem">Ecosystem</a><a href="#capabilities">Capabilities</a><a href="#roles">For everyone</a></div>
+      <div class="nav-actions"><button class="icon-btn theme-toggle" aria-label="Toggle theme">☼</button><button class="btn btn-primary" id="open-auth">Enter NeonVerse <span>↗</span></button></div>
+      <button class="mobile-menu" id="mobile-menu" aria-label="Open navigation">☰</button>
+    </nav>
+
+    <section class="hero">
+      <div class="hero-copy">
+        <div class="eyebrow"><span class="pulse-dot"></span> THE CONNECTED CAMPUS OPERATING SYSTEM</div>
+        <h1>Your campus.<br><span class="gradient-text">One universe.</span></h1>
+        <p class="hero-lede">A smarter space for university life. Bring student communities, hostel operations, applications and campus services together in one beautifully connected experience.</p>
+        <div class="hero-actions"><button class="btn btn-primary btn-large" id="hero-enter">Explore NeonVerse <span>↗</span></button><a class="text-link" href="#ecosystem">Discover the ecosystem <span>↓</span></a></div>
+        <div class="hero-proof"><div class="avatar-stack"><span>A</span><span>R</span><span>M</span><span>+</span></div><div><strong>One campus community</strong><small>Students · Wardens · Faculty · Admin</small></div></div>
+      </div>
+      <div class="hero-visual">
+        <div class="orbit orbit-a"></div><div class="orbit orbit-b"></div><div class="orbit orbit-c"></div>
+        <div class="hero-core"><div class="core-symbol">N</div><div class="core-caption">CAMPUS<br>CONNECTED</div></div>
+        <div class="float-card float-card-top"><span class="float-icon violet">✦</span><div><b>Everything in sync</b><small>One connected campus</small></div><span class="live-pill">LIVE</span></div>
+        <div class="float-card float-card-bottom"><span class="float-icon cyan">⌁</span><div><b>Leave request updated</b><small>Warden review workspace</small></div><span class="tiny-check">✓</span></div>
+        <div class="orbit-node node-one">⌂</div><div class="orbit-node node-two">✉</div><div class="orbit-node node-three">▦</div>
+      </div>
+      <div class="hero-bottomline"><span>BUILT AROUND CAMPUS LIFE</span><span>01 / 04</span></div>
+    </section>
+
+    <section class="ticker"><div>STUDENT COMMUNITY <i>✳</i> HOSTEL OPERATIONS <i>✳</i> CAMPUS SERVICES <i>✳</i> SMART APPLICATIONS <i>✳</i> ACADEMIC LIFE <i>✳</i> STUDENT COMMUNITY <i>✳</i></div></section>
+
+    <section class="section ecosystem" id="ecosystem">
+      <div class="section-heading"><div><div class="eyebrow">A SINGLE CAMPUS UNIVERSE</div><h2>Less scattered.<br><span class="gradient-text">More connected.</span></h2></div><p>NeonVerse connects the everyday workflows that make a university work — from a student's first login to a warden's approval desk.</p></div>
+      <div class="ecosystem-grid">
+        <article class="feature-card feature-large"><div class="feature-top"><span class="feature-icon purple">⌘</span><span class="card-index">01 / COMMUNITY</span></div><h3>Find your people.</h3><p>Discover classmates, connect across departments, and keep campus conversations in one place.</p><div class="mini-chat"><div class="mini-chat-head"><span class="mini-avatar">S</span><div><b>Campus Connect</b><small>Department community</small></div><span class="online-dot"></span></div><div class="chat-bubble">Anyone joining the robotics club meetup?</div><div class="chat-bubble mine">Count me in! ✨</div></div></article>
+        <article class="feature-card"><div class="feature-top"><span class="feature-icon cyan">⌂</span><span class="card-index">02 / HOSTEL</span></div><h3>Hostel, simplified.</h3><p>Leave applications, room requests, complaints and warden workflows.</p><div class="stat-strip"><div><strong>24/7</strong><small>Request access</small></div><div><strong>One</strong><small>Approval hub</small></div></div></article>
+        <article class="feature-card"><div class="feature-top"><span class="feature-icon orange">▤</span><span class="card-index">03 / ACADEMICS</span></div><h3>Stay in the loop.</h3><p>Timetables, notices, events, attendance snapshots and academic updates.</p><div class="schedule-mini"><span>MON</span><b>Design Systems</b><small>10:30 AM · Block  e</small></div></article>
+        <article class="feature-card feature-wide"><div class="feature-top"><span class="feature-icon green">✳</span><span class="card-index">04 / SMART WORKFLOWS</span></div><h3>From request to resolution.</h3><p>Draft, submit, track and review applications with clear status history. AI-assisted form completion is designed as a future Agent37 integration.</p><div class="workflow"><span>Draft</span><i>→</i><span>Submitted</span><i>→</i><span>Review</span><i>→</i><span class="complete">Resolved</span></div></article>
+      </div>
+    </section>
+
+    <section class="section capabilities" id="capabilities"><div class="eyebrow">THE TOOLKIT</div><h2>Everyday campus life,<br><span class="gradient-text">thoughtfully organised.</span></h2><div class="capability-grid">
+      <div class="capability"><span>✉</span><b>Campus messaging</b><small>Direct and group conversations</small></div><div class="capability"><span>▤</span><b>Leave & applications</b><small>Submit, track and review requests</small></div><div class="capability"><span>◉</span><b>Student directory</b><small>Discover verified campus profiles</small></div><div class="capability"><span>◷</span><b>Notice board</b><small>Announcements and campus updates</small></div><div class="capability"><span>⌂</span><b>Hostel helpdesk</b><small>Complaints and room requests</small></div><div class="capability"><span>▦</span><b>Academic planner</b><small>Timetables and key dates</small></div><div class="capability"><span>♧</span><b>Events & clubs</b><small>Find activities and communities</small></div><div class="capability"><span>◈</span><b>Reports & insights</b><small>Activity and application summaries</small></div>
+    </div></section>
+
+    <section class="section roles" id="roles"><div class="section-heading"><div><div class="eyebrow">DESIGNED FOR THE WHOLE CAMPUS</div><h2>One platform.<br><span class="gradient-text">Clear responsibilities.</span></h2></div><p>Role-aware workspaces keep the right tools in front of the right people.</p></div><div class="role-grid"><div class="role-card"><span class="role-num">01</span><h3>Students</h3><p>Connect, apply, track, discover and manage campus life.</p><span class="role-arrow">↗</span></div><div class="role-card"><span class="role-num">02</span><h3>Wardens</h3><p>Review applications, manage hostel requests and communicate with residents.</p><span class="role-arrow">↗</span></div><div class="role-card"><span class="role-num">03</span><h3>Faculty</h3><p>Share notices, support student communities and access permitted tools.</p><span class="role-arrow">↗</span></div><div class="role-card"><span class="role-num">04</span><h3>Administrators</h3><p>Oversee roles, college settings, policies and platform activity.</p><span class="role-arrow">↗</span></div></div></section>
+    <section class="closing-cta"><div class="eyebrow">YOUR CAMPUS IS WAITING</div><h2>Make campus life<br><span class="gradient-text">feel connected.</span></h2><p>One login. A whole university ecosystem.</p><button class="btn btn-primary btn-large" id="closing-enter">Enter NeonVerse <span>↗</span></button></section>
+    <footer class="footer"><a class="brand" href="#"><span class="brand-mark">N</span><span>NEON<span class="brand-accent">VERSE</span></span></a><span>© 2026 NeonVerse · Campus, connected.</span><a href="#ecosystem">Back to top ↑</a></footer>
+  </main>
+
+  <section id="auth-screen" class="auth-screen hidden">
+    <button class="back-home" id="back-home">← Back to home</button>
+    <div class="auth-decoration"><div class="auth-glow"></div><div class="auth-brand"><span class="brand-mark">N</span><h2>NEON<span class="brand-accent">VERSE</span></h2><p>Your campus universe starts here.</p></div><div class="auth-foot">ONE CAMPUS. MANY POSSIBILITIES.</div></div>
+    <div class="auth-panel"><div class="auth-panel-inner">
+      <div class="auth-mobile-brand brand"><span class="brand-mark">N</span> NEON<span class="brand-accent">VERSE</span></div>
+      <div class="eyebrow">WELCOME TO YOUR CAMPUS</div><h1 id="auth-title">Sign in to<br><span class="gradient-text">your universe.</span></h1><p class="auth-sub" id="auth-sub">Continue with your university account.</p>
+      <div class="auth-tabs"><button class="auth-tab active" data-auth-mode="signin">Sign in</button><button class="auth-tab" data-auth-mode="signup">Create account</button></div>
+      <div id="auth-error" class="form-error hidden"></div>
+      <form id="auth-form">
+        <div class="field"><label for="auth-email">University email</label><input id="auth-email" type="email" placeholder="you@university.edu" autocomplete="email" required></div>
+        <div class="field"><label for="auth-password">Password</label><input id="auth-password" type="password" placeholder="At least 6 characters" autocomplete="current-password" minlength="6" required></div>
+        <div id="signup-extra" class="hidden">
+          <div class="field"><label for="signup-name">Full name</label><input id="signup-name" type="text" placeholder="Your full name" autocomplete="name"></div>
+          <div class="field"><label for="signup-university">University name</label><input id="signup-university" type="text" placeholder="Your university"></div>
+        </div>
+        <button class="btn btn-primary btn-block btn-large" id="auth-submit" type="submit">Sign in <span>↗</span></button>
+      </form>
+      <div class="divider-label"><span>OR CONTINUE WITH</span></div>
+      <button class="google-btn" id="google-signin"><span class="google-g">G</span> Continue with Google</button>
+      <div class="warden-entry"><span>University staff?</span><button id="warden-mode">Warden access</button></div>
+      <div id="warden-box" class="warden-box hidden"><b style="font-size:11px">Restricted staff workspace</b><br><small>Only accounts pre-authorised by your university administrator in Firebase can enter as a warden. A browser-side secret code is not used as security.</small></div>
+      <p class="auth-legal">By continuing, you agree to your institution's acceptable-use and privacy policies.</p>
+    </div></div>
+  </section>
+
+  <section id="app-shell" class="app-shell hidden">
+    <aside class="sidebar" id="sidebar">
+      <a class="brand sidebar-brand" href="#"><span class="brand-mark">N</span><span>NEON<span class="brand-accent">VERSE</span></span></a>
+      <div class="workspace-label">WORKSPACE</div>
+      <nav class="side-nav" id="side-nav">
+        <button class="side-link active" data-page="overview"><span>◫</span> Overview</button>
+        <button class="side-link" data-page="applications"><span>▤</span> Applications <i id="pending-count" class="nav-count">0</i></button>
+        <button class="side-link" data-page="messages"><span>✉</span> Messages</button>
+        <button class="side-link" data-page="directory"><span>◎</span> Student directory</button>
+        <div class="nav-divider"></div><div class="workspace-label">CAMPUS LIFE</div>
+        <button class="side-link" data-page="notices"><span>◷</span> Notice board</button>
+        <button class="side-link" data-page="academics"><span>▦</span> Academics</button>
+        <button class="side-link" data-page="hostel"><span>⌂</span> Hostel services</button>
+        <button class="side-link" data-page="events"><span>✳</span> Events & clubs</button>
+        <div class="nav-divider"></div><div class="workspace-label">PERSONAL</div>
+        <button class="side-link" data-page="profile"><span>◉</span> My profile</button>
+        <button class="side-link" data-page="settings"><span>⚙</span> Settings</button>
+      </nav>
+      <div class="sidebar-bottom"><div class="help-card"><span>✦</span><b>Need a hand?</b><small>Your campus guide is coming soon with Agent37.</small></div><button class="side-link" id="signout"><span>↪</span> Sign out</button></div>
+    </aside>
+    <div class="main-area">
+      <header class="app-topbar"><button class="mobile-menu app-menu" id="app-menu">☰</button><div class="crumb">Workspace <span>/</span> <b id="page-crumb">Overview</b></div><div class="topbar-actions"><button class="search-trigger" id="global-search"><span>⌕</span> Search anything <kbd>Ctrl K</kbd></button><button class="icon-btn theme-toggle" aria-label="Toggle theme">☼</button><button class="icon-btn notification-btn" id="notification-button" aria-label="Notifications">♧<i></i></button><button class="user-chip" id="user-chip"><span class="user-avatar" id="top-avatar">N</span><span><b id="top-name">Student</b><small id="top-role">Student</small></span><span>⌄</span></button></div></header>
+      <main class="page-content" id="page-content"><div class="loading-state"><div class="loader"></div>Preparing your campus workspace…</div></main>
+    </div>
+  </section>
+
+  <div class="modal-backdrop hidden" id="modal-backdrop"><div class="modal" id="modal"><button class="modal-close" id="modal-close">×</button><div id="modal-content"></div></div></div>
+  <div class="tour-overlay hidden" id="tour-overlay"><div class="tour-card"><span class="eyebrow">NEONVERSE QUICK TOUR</span><div class="tour-step" id="tour-step">01 / 04</div><h3 id="tour-title">Your campus overview</h3><p id="tour-copy">A quick look around your workspace.</p><div class="tour-actions"><button class="btn btn-ghost" id="tour-skip">Skip tour</button><button class="btn btn-primary" id="tour-next">Next →</button></div></div></div>
+</body>
+</html>
