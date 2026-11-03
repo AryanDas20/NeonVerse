@@ -1,114 +1,434 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    function signedIn() { return request.auth != null; }
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function profilePath(uid) {
+      return /databases/$(database)/documents/profiles/$(uid);
+    }
+
+    function rolePath(uid) {
+      return /databases/$(database)/documents/roles/$(uid);
+    }
+
     function myProfile() {
-      return get(/databases/$(database)/documents/profiles/$(request.auth.uid)).data;
+      return get(profilePath(request.auth.uid)).data;
     }
-    function sameUniversity(university) {
-      return signedIn() && myProfile().university == university;
+
+    function roleName() {
+      return exists(rolePath(request.auth.uid))
+        ? get(rolePath(request.auth.uid)).data.role
+        : 'student';
     }
-    function hasRole(role) {
-      return signedIn() &&
-        get(/databases/$(database)/documents/roles/$(request.auth.uid)).data.role == role;
+
+    function isStaff() {
+      return signedIn() && roleName() in ['warden', 'admin', 'faculty', 'verifier'];
     }
-    function staff() {
-      return signedIn() &&
-        (get(/databases/$(database)/documents/roles/$(request.auth.uid)).data.role in ['warden','admin','faculty']);
+
+    function isVerifier() {
+      return signedIn() && roleName() in ['admin', 'verifier'];
     }
-    function validConversationMembers(participants, university) {
-      return participants.size() == 2
-        && get(/databases/$(database)/documents/profiles/$(participants[0])).data.university == university
-        && get(/databases/$(database)/documents/profiles/$(participants[1])).data.university == university;
+
+    function sameCampus(campusKey) {
+      return signedIn()
+        && myProfile().universityKey == campusKey;
+    }
+
+    function staffForCampus(campusKey) {
+      return isStaff() && sameCampus(campusKey);
+    }
+
+    function verifierForCampus(campusKey) {
+      return isVerifier() && sameCampus(campusKey);
+    }
+
+    function verifiedCampusStudent(uid, campusKey) {
+      return exists(profilePath(uid))
+        && get(profilePath(uid)).data.universityKey == campusKey
+        && get(profilePath(uid)).data.profileComplete == true
+        && get(profilePath(uid)).data.membershipStatus == 'verified';
+    }
+
+    // Explicit checks support groups of up to eight verified campus members.
+    function validCampusParticipants(p, campusKey) {
+      return p is list && (
+        (p.size() == 2
+          && verifiedCampusStudent(p[0], campusKey)
+          && verifiedCampusStudent(p[1], campusKey))
+        ||
+        (p.size() == 3
+          && verifiedCampusStudent(p[0], campusKey)
+          && verifiedCampusStudent(p[1], campusKey)
+          && verifiedCampusStudent(p[2], campusKey))
+        ||
+        (p.size() == 4
+          && verifiedCampusStudent(p[0], campusKey)
+          && verifiedCampusStudent(p[1], campusKey)
+          && verifiedCampusStudent(p[2], campusKey)
+          && verifiedCampusStudent(p[3], campusKey))
+        ||
+        (p.size() == 5
+          && verifiedCampusStudent(p[0], campusKey)
+          && verifiedCampusStudent(p[1], campusKey)
+          && verifiedCampusStudent(p[2], campusKey)
+          && verifiedCampusStudent(p[3], campusKey)
+          && verifiedCampusStudent(p[4], campusKey))
+        ||
+        (p.size() == 6
+          && verifiedCampusStudent(p[0], campusKey)
+          && verifiedCampusStudent(p[1], campusKey)
+          && verifiedCampusStudent(p[2], campusKey)
+          && verifiedCampusStudent(p[3], campusKey)
+          && verifiedCampusStudent(p[4], campusKey)
+          && verifiedCampusStudent(p[5], campusKey))
+        ||
+        (p.size() == 7
+          && verifiedCampusStudent(p[0], campusKey)
+          && verifiedCampusStudent(p[1], campusKey)
+          && verifiedCampusStudent(p[2], campusKey)
+          && verifiedCampusStudent(p[3], campusKey)
+          && verifiedCampusStudent(p[4], campusKey)
+          && verifiedCampusStudent(p[5], campusKey)
+          && verifiedCampusStudent(p[6], campusKey))
+        ||
+        (p.size() == 8
+          && verifiedCampusStudent(p[0], campusKey)
+          && verifiedCampusStudent(p[1], campusKey)
+          && verifiedCampusStudent(p[2], campusKey)
+          && verifiedCampusStudent(p[3], campusKey)
+          && verifiedCampusStudent(p[4], campusKey)
+          && verifiedCampusStudent(p[5], campusKey)
+          && verifiedCampusStudent(p[6], campusKey)
+          && verifiedCampusStudent(p[7], campusKey))
+      );
     }
 
     match /roles/{uid} {
       allow read: if signedIn() && request.auth.uid == uid;
-      // Roles must be assigned manually by a trusted project owner in Firebase Console.
+      // Roles are assigned only by the project owner in the Firebase Console.
       allow write: if false;
     }
 
     match /profiles/{uid} {
-      allow create: if signedIn() && request.auth.uid == uid
+      allow create: if signedIn()
+        && request.auth.uid == uid
         && request.resource.data.uid == uid
-        && request.resource.data.role == 'student';
+        && request.resource.data.role == 'student'
+        && request.resource.data.membershipStatus == 'pending';
+
       allow read: if signedIn() && (
-        request.auth.uid == uid ||
-        (resource.data.university == myProfile().university)
+        request.auth.uid == uid
+        || (sameCampus(resource.data.universityKey)
+          && myProfile().membershipStatus == 'verified'
+          && resource.data.membershipStatus == 'verified')
+        || staffForCampus(resource.data.universityKey)
       );
-      allow update: if signedIn() && request.auth.uid == uid
-        && request.resource.data.uid == resource.data.uid
-        && request.resource.data.role == resource.data.role
-        && request.resource.data.createdAt == resource.data.createdAt;
+
+      // Students cannot change their campus, verification state, UID or role.
+      allow update: if signedIn() && (
+        (request.auth.uid == uid
+          && request.resource.data.uid == resource.data.uid
+          && request.resource.data.role == resource.data.role
+          && request.resource.data.createdAt == resource.data.createdAt
+          && request.resource.data.profileComplete == resource.data.profileComplete
+          && request.resource.data.universityKey == resource.data.universityKey
+          && request.resource.data.membershipStatus == resource.data.membershipStatus
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'name', 'email', 'phone', 'collegeId', 'department',
+            'course', 'year', 'hostel', 'room', 'bio', 'profileComplete',
+            'updatedAt'
+          ]))
+        ||
+        // Migrate accounts created by the previous starter release.
+        (request.auth.uid == uid
+          && !resource.data.keys().hasAny(['universityKey'])
+          && request.resource.data.uid == resource.data.uid
+          && request.resource.data.role == resource.data.role
+          && request.resource.data.createdAt == resource.data.createdAt
+          && request.resource.data.membershipStatus == 'pending'
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'universityKey', 'membershipStatus', 'updatedAt'
+          ]))
+        ||
+        // A newly registered user may complete the campus name/key once.
+        (request.auth.uid == uid
+          && resource.data.profileComplete != true
+          && request.resource.data.uid == resource.data.uid
+          && request.resource.data.role == resource.data.role
+          && request.resource.data.createdAt == resource.data.createdAt
+          && request.resource.data.membershipStatus == 'pending'
+          && request.resource.data.profileComplete == true
+          && request.resource.data.universityKey is string
+          && request.resource.data.universityKey.size() > 0
+          && request.resource.data.name is string && request.resource.data.name.size() > 0
+          && request.resource.data.university is string && request.resource.data.university.size() > 0
+          && request.resource.data.collegeId is string && request.resource.data.collegeId.size() > 0
+          && request.resource.data.department is string && request.resource.data.department.size() > 0
+          && request.resource.data.course is string && request.resource.data.course.size() > 0
+          && request.resource.data.year is number
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'name', 'email', 'phone', 'collegeId', 'university', 'universityKey',
+            'department', 'course', 'year', 'hostel', 'room', 'bio',
+            'profileComplete', 'updatedAt'
+          ]))
+        ||
+        // Destination-campus staff can apply an approved campus transfer.
+        (staffForCampus(request.resource.data.universityKey)
+          && request.resource.data.uid == resource.data.uid
+          && request.resource.data.role == resource.data.role
+          && request.resource.data.createdAt == resource.data.createdAt
+          && request.resource.data.membershipStatus == 'pending'
+          && request.resource.data.lastCampusTransferId is string
+          && exists(/databases/$(database)/documents/campusChangeRequests/$(request.resource.data.lastCampusTransferId))
+          && get(/databases/$(database)/documents/campusChangeRequests/$(request.resource.data.lastCampusTransferId)).data.status == 'approved'
+          && get(/databases/$(database)/documents/campusChangeRequests/$(request.resource.data.lastCampusTransferId)).data.studentUid == uid
+          && request.resource.data.universityKey != resource.data.universityKey
+          && get(/databases/$(database)/documents/campusChangeRequests/$(request.resource.data.lastCampusTransferId)).data.requestedUniversityKey == request.resource.data.universityKey
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'university', 'universityKey', 'lastCampusTransferId', 'membershipStatus',
+            'membershipReviewedBy', 'membershipReviewedAt', 'updatedAt'
+          ]))
+        ||
+        // Only a same-campus admin/verifier can verify a student.
+        (verifierForCampus(resource.data.universityKey)
+          && resource.data.membershipStatus == 'pending'
+          && request.resource.data.uid == resource.data.uid
+          && request.resource.data.role == resource.data.role
+          && request.resource.data.universityKey == resource.data.universityKey
+          && request.resource.data.membershipStatus in ['verified', 'rejected']
+          && request.resource.data.membershipReviewedBy == request.auth.uid
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'membershipStatus', 'membershipReviewedBy', 'membershipReviewedAt', 'updatedAt'
+          ]))
+      );
+
       allow delete: if false;
     }
 
-    match /applications/{appId} {
+    match /campusChangeRequests/{requestId} {
       allow create: if signedIn()
         && request.resource.data.studentUid == request.auth.uid
-        && request.resource.data.university == myProfile().university
+        && myProfile().profileComplete == true
+        && myProfile().membershipStatus == 'verified'
+        && request.resource.data.currentUniversityKey == myProfile().universityKey
+        && request.resource.data.requestedUniversityKey is string
+        && request.resource.data.requestedUniversityKey.size() > 0
+        && request.resource.data.requestedUniversityKey != myProfile().universityKey
         && request.resource.data.status == 'pending';
+
       allow read: if signedIn() && (
-        resource.data.studentUid == request.auth.uid ||
-        (staff() && sameUniversity(resource.data.university))
+        resource.data.studentUid == request.auth.uid
+        || staffForCampus(resource.data.requestedUniversityKey)
       );
+
+      allow update: if verifierForCampus(resource.data.requestedUniversityKey)
+        && resource.data.status == 'pending'
+        && request.resource.data.studentUid == resource.data.studentUid
+        && request.resource.data.requestedUniversityKey == resource.data.requestedUniversityKey
+        && request.resource.data.currentUniversityKey == resource.data.currentUniversityKey
+        && request.resource.data.status in ['approved', 'rejected']
+        && request.resource.data.reviewedBy == request.auth.uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'status', 'reviewedBy', 'reviewedAt'
+        ]);
+
+      allow delete: if false;
+    }
+
+    match /applications/{applicationId} {
+      allow create: if signedIn()
+        && request.resource.data.studentUid == request.auth.uid
+        && request.resource.data.universityKey == myProfile().universityKey
+        && request.resource.data.status == 'pending';
+
+      allow read: if signedIn() && (
+        resource.data.studentUid == request.auth.uid
+        || (resource.data.keys().hasAny(['universityKey']) && staffForCampus(resource.data.universityKey))
+        || (isStaff() && resource.data.university == myProfile().university)
+      );
+
       allow update: if signedIn() && (
         (resource.data.studentUid == request.auth.uid
           && resource.data.status == 'pending'
+          && request.resource.data.status == 'cancelled'
           && request.resource.data.studentUid == resource.data.studentUid
-          && request.resource.data.university == resource.data.university
-          && request.resource.data.status == resource.data.status)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'status', 'updatedAt', 'cancelledAt'
+          ]))
         ||
-        (staff() && sameUniversity(resource.data.university)
+        (((resource.data.keys().hasAny(['universityKey']) && staffForCampus(resource.data.universityKey))
+          || (isStaff() && resource.data.university == myProfile().university))
           && request.resource.data.studentUid == resource.data.studentUid
-          && request.resource.data.university == resource.data.university)
+          && request.resource.data.reviewedBy == request.auth.uid
+          && request.resource.data.status in ['approved', 'rejected', 'escalated']
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'status', 'reviewComment', 'reviewedBy', 'updatedAt', 'history'
+          ]))
       );
+
       allow delete: if false;
     }
 
     match /conversations/{conversationId} {
       allow create: if signedIn()
         && request.auth.uid in request.resource.data.participants
-        && sameUniversity(request.resource.data.university)
-        && validConversationMembers(request.resource.data.participants, request.resource.data.university);
+        && request.resource.data.universityKey == myProfile().universityKey
+        && request.resource.data.type in ['direct', 'group']
+        && request.resource.data.participants.size() >= 2
+        && request.resource.data.participants.size() <= 8
+        && validCampusParticipants(request.resource.data.participants, request.resource.data.universityKey)
+        && (
+          (request.resource.data.type == 'direct' && request.resource.data.participants.size() == 2)
+          ||
+          (request.resource.data.type == 'group'
+            && request.resource.data.admins is list
+            && request.resource.data.admins.size() >= 1
+            && request.resource.data.participants.hasAll(request.resource.data.admins)
+            && request.auth.uid in request.resource.data.admins)
+        );
+
       allow read: if signedIn()
         && request.auth.uid in resource.data.participants
-        && sameUniversity(resource.data.university)
-        && validConversationMembers(resource.data.participants, resource.data.university);
+        && (
+          (resource.data.keys().hasAny(['universityKey'])
+            && sameCampus(resource.data.universityKey)
+            && validCampusParticipants(resource.data.participants, resource.data.universityKey))
+          ||
+          (!resource.data.keys().hasAny(['universityKey'])
+            && resource.data.university == myProfile().university
+            && validCampusParticipants(resource.data.participants, myProfile().universityKey))
+        );
+
+      // Participants update message metadata; group admins manage group membership.
       allow update: if signedIn()
         && request.auth.uid in resource.data.participants
-        && request.resource.data.participants == resource.data.participants
-        && request.resource.data.university == resource.data.university
-        && sameUniversity(resource.data.university)
-        && validConversationMembers(resource.data.participants, resource.data.university);
-      allow delete: if false;
+        && (
+          (resource.data.keys().hasAny(['universityKey'])
+            && sameCampus(resource.data.universityKey)
+            && validCampusParticipants(resource.data.participants, resource.data.universityKey)
+            && (
+              (request.resource.data.participants == resource.data.participants
+                && request.resource.data.admins == resource.data.admins
+                && request.resource.data.groupName == resource.data.groupName
+                && request.resource.data.type == resource.data.type
+                && request.resource.data.universityKey == resource.data.universityKey
+                && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+                  'lastMessage', 'lastMessageAt', 'updatedAt'
+                ]))
+              ||
+              (resource.data.type == 'group'
+                && request.auth.uid in resource.data.admins
+                && request.resource.data.type == 'group'
+                && request.resource.data.universityKey == resource.data.universityKey
+                && request.resource.data.participants.size() >= 2
+                && request.resource.data.participants.size() <= 8
+                && validCampusParticipants(request.resource.data.participants, resource.data.universityKey)
+                && request.resource.data.admins is list
+                && request.resource.data.admins.size() >= 1
+                && request.resource.data.participants.hasAll(request.resource.data.admins)
+                && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+                  'groupName', 'participants', 'admins', 'memberNames', 'updatedAt'
+                ]))
+            )
+          )
+          ||
+          // One-time migration of legacy direct conversations.
+          (!resource.data.keys().hasAny(['universityKey'])
+            && resource.data.university == myProfile().university
+            && resource.data.participants.size() == 2
+            && validCampusParticipants(resource.data.participants, myProfile().universityKey)
+            && request.resource.data.type == 'direct'
+            && request.resource.data.universityKey == myProfile().universityKey
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+              'type', 'groupName', 'admins', 'memberNames', 'universityKey', 'updatedAt'
+            ]))
+        );
+
+      allow delete: if signedIn()
+        && resource.data.type == 'group'
+        && request.auth.uid in resource.data.admins
+        && sameCampus(resource.data.universityKey);
+
       match /messages/{messageId} {
-        function conversation() {
+        function parentConversation() {
           return get(/databases/$(database)/documents/conversations/$(conversationId)).data;
         }
-        allow read: if signedIn()
-          && request.auth.uid in conversation().participants
-          && sameUniversity(conversation().university);
-        allow create: if signedIn()
-          && request.auth.uid in conversation().participants
+
+        function isConversationMember() {
+          return signedIn()
+            && request.auth.uid in parentConversation().participants
+            && sameCampus(parentConversation().universityKey)
+            && validCampusParticipants(parentConversation().participants, parentConversation().universityKey);
+        }
+
+        allow read: if isConversationMember();
+
+        allow create: if isConversationMember()
           && request.resource.data.senderUid == request.auth.uid
-          && request.resource.data.receiverUid in conversation().participants
-          && sameUniversity(conversation().university);
-        allow update, delete: if false;
+          && request.resource.data.text is string
+          && request.resource.data.text.size() <= 4000
+          && request.resource.data.readBy is list
+          && request.resource.data.readBy.hasOnly([request.auth.uid]);
+
+        allow update: if isConversationMember() && (
+          (resource.data.senderUid == request.auth.uid
+            && resource.data.deleted != true
+            && request.resource.data.senderUid == resource.data.senderUid
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+              'text', 'edited', 'deleted', 'updatedAt'
+            ]))
+          ||
+          (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['readBy'])
+            && request.resource.data.readBy is list
+            && (!resource.data.keys().hasAny(['readBy']) || request.resource.data.readBy.hasAll(resource.data.readBy))
+            && request.auth.uid in request.resource.data.readBy)
+        );
+
+        allow delete: if isConversationMember()
+          && parentConversation().type == 'group'
+          && request.auth.uid in parentConversation().admins;
       }
     }
 
     match /notices/{noticeId} {
-      allow read: if signedIn() && sameUniversity(resource.data.university);
-      allow create: if staff()
-        && request.resource.data.university == myProfile().university;
-      allow update, delete: if staff() && sameUniversity(resource.data.university);
+      allow read: if signedIn()
+        && ((resource.data.keys().hasAny(['universityKey']) && sameCampus(resource.data.universityKey))
+          || resource.data.university == myProfile().university)
+        && (myProfile().membershipStatus == 'verified' || isStaff());
+
+      allow create: if isStaff()
+        && request.resource.data.universityKey == myProfile().universityKey
+        && request.resource.data.authorUid == request.auth.uid;
+
+      allow update, delete: if isStaff()
+        && sameCampus(resource.data.universityKey);
     }
 
-    match /activity/{activityId} {
-      allow create: if signedIn() && request.resource.data.actorUid == request.auth.uid;
-      allow read: if staff() && sameUniversity(myProfile().university);
-      allow update, delete: if false;
+    match /notifications/{recipientUid}/items/{notificationId} {
+      allow read: if signedIn() && request.auth.uid == recipientUid;
+
+      allow create: if signedIn()
+        && request.resource.data.fromUid == request.auth.uid
+        && request.resource.data.universityKey == myProfile().universityKey
+        && exists(profilePath(recipientUid))
+        && (
+          get(profilePath(recipientUid)).data.universityKey == myProfile().universityKey
+          || (request.resource.data.type == 'membership'
+            && isVerifier()
+            && request.resource.data.requestId is string
+            && exists(/databases/$(database)/documents/campusChangeRequests/$(request.resource.data.requestId))
+            && get(/databases/$(database)/documents/campusChangeRequests/$(request.resource.data.requestId)).data.studentUid == recipientUid
+            && get(/databases/$(database)/documents/campusChangeRequests/$(request.resource.data.requestId)).data.requestedUniversityKey == myProfile().universityKey
+            && get(/databases/$(database)/documents/campusChangeRequests/$(request.resource.data.requestId)).data.status in ['approved', 'rejected'])
+        );
+
+      allow update: if signedIn()
+        && request.auth.uid == recipientUid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read', 'readAt']);
+
+      allow delete: if signedIn() && request.auth.uid == recipientUid;
     }
 
     match /{document=**} {
