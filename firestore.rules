@@ -28,7 +28,7 @@ service cloud.firestore {
     }
 
     function isVerifier() {
-      return signedIn() && roleName() in ['admin', 'verifier'];
+      return signedIn() && roleName() in ['admin', 'warden', 'faculty'];
     }
 
     function sameCampus(campusKey) {
@@ -44,6 +44,34 @@ service cloud.firestore {
       return isVerifier() && sameCampus(campusKey);
     }
 
+    function canPublishAcademic() {
+      return signedIn() && roleName() == 'faculty';
+    }
+
+    function canManageHostel() {
+      return signedIn() && roleName() in ['warden', 'admin'];
+    }
+
+    function canManageGroups() {
+      return signedIn() && roleName() in ['warden', 'faculty', 'admin'];
+    }
+
+    function canCreateChannel(kind) {
+      return signedIn() && (
+        (roleName() == 'faculty' && kind in ['class', 'subject', 'club'])
+        || (roleName() == 'warden' && kind in ['hostel', 'club'])
+        || (roleName() == 'admin' && kind in ['class', 'subject', 'hostel', 'campus', 'club'])
+      );
+    }
+
+    function channelDoc(channelId) {
+      return /databases/$(database)/documents/channels/$(channelId);
+    }
+
+    function channelMemberDoc(channelId, uid) {
+      return /databases/$(database)/documents/channelMemberships/$(channelId + '_' + uid);
+    }
+
     function verifiedCampusStudent(uid, campusKey) {
       return exists(profilePath(uid))
         && get(profilePath(uid)).data.universityKey == campusKey
@@ -51,7 +79,8 @@ service cloud.firestore {
         && get(profilePath(uid)).data.membershipStatus == 'verified';
     }
 
-    // Explicit checks support groups of up to eight verified campus members.
+    // Firestore Rules cannot loop over a list. These explicit checks support groups
+    // of up to eight members while verifying every member against a campus profile.
     function validCampusParticipants(p, campusKey) {
       return p is list && (
         (p.size() == 2
@@ -126,7 +155,8 @@ service cloud.firestore {
         || staffForCampus(resource.data.universityKey)
       );
 
-      // Students cannot change their campus, verification state, UID or role.
+      // A student can edit their own personal details, but cannot change their
+      // university membership, verification state, UID, role or creation time.
       allow update: if signedIn() && (
         (request.auth.uid == uid
           && request.resource.data.uid == resource.data.uid
@@ -139,7 +169,8 @@ service cloud.firestore {
             'name', 'email', 'phone', 'collegeId', 'department',
             'course', 'year', 'hostel', 'room', 'bio', 'profileComplete',
             'updatedAt'
-          ]))
+          ])
+        )
         ||
         // Migrate accounts created by the previous starter release.
         (request.auth.uid == uid
@@ -148,9 +179,7 @@ service cloud.firestore {
           && request.resource.data.role == resource.data.role
           && request.resource.data.createdAt == resource.data.createdAt
           && request.resource.data.membershipStatus == 'pending'
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-            'universityKey', 'membershipStatus', 'updatedAt'
-          ]))
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['universityKey', 'membershipStatus', 'updatedAt']))
         ||
         // A newly registered user may complete the campus name/key once.
         (request.auth.uid == uid
@@ -170,11 +199,25 @@ service cloud.firestore {
           && request.resource.data.year is number
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
             'name', 'email', 'phone', 'collegeId', 'university', 'universityKey',
-            'department', 'course', 'year', 'hostel', 'room', 'bio',
-            'profileComplete', 'updatedAt'
+            'department', 'course', 'year', 'hostel', 'room', 'bio', 'profileComplete', 'updatedAt'
           ]))
         ||
-        // Destination-campus staff can apply an approved campus transfer.
+        // A pre-authorised staff account can publish its assigned role to its campus profile
+        // and becomes eligible for staff tools only after completing its own profile.
+        (request.auth.uid == uid
+          && staffForCampus(resource.data.universityKey)
+          && request.resource.data.uid == resource.data.uid
+          && request.resource.data.createdAt == resource.data.createdAt
+          && request.resource.data.universityKey == resource.data.universityKey
+          && request.resource.data.profileComplete == true
+          && request.resource.data.role == roleName()
+          && request.resource.data.membershipStatus == 'verified'
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'role', 'membershipStatus', 'membershipReviewedBy', 'membershipReviewedAt', 'updatedAt'
+          ]))
+        ||
+        // Destination-campus staff can apply a transfer only after approving
+        // the matching campusChangeRequests document.
         (staffForCampus(request.resource.data.universityKey)
           && request.resource.data.uid == resource.data.uid
           && request.resource.data.role == resource.data.role
@@ -191,7 +234,7 @@ service cloud.firestore {
             'membershipReviewedBy', 'membershipReviewedAt', 'updatedAt'
           ]))
         ||
-        // Only a same-campus admin/verifier can verify a student.
+        // Only a Warden, Faculty member or Administrator from this campus can verify a student.
         (verifierForCampus(resource.data.universityKey)
           && resource.data.membershipStatus == 'pending'
           && request.resource.data.uid == resource.data.uid
@@ -254,12 +297,10 @@ service cloud.firestore {
           && resource.data.status == 'pending'
           && request.resource.data.status == 'cancelled'
           && request.resource.data.studentUid == resource.data.studentUid
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-            'status', 'updatedAt', 'cancelledAt'
-          ]))
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt', 'cancelledAt']))
         ||
         (((resource.data.keys().hasAny(['universityKey']) && staffForCampus(resource.data.universityKey))
-          || (isStaff() && resource.data.university == myProfile().university))
+          || (isVerifier() && resource.data.university == myProfile().university))
           && request.resource.data.studentUid == resource.data.studentUid
           && request.resource.data.reviewedBy == request.auth.uid
           && request.resource.data.status in ['approved', 'rejected', 'escalated']
@@ -289,19 +330,17 @@ service cloud.firestore {
             && request.auth.uid in request.resource.data.admins)
         );
 
+      // Query-safe read rule: the client query filters by participants and
+      // universityKey. Campus membership is checked against the signed-in user's
+      // own profile; creation and group membership changes validate every member.
       allow read: if signedIn()
         && request.auth.uid in resource.data.participants
-        && (
-          (resource.data.keys().hasAny(['universityKey'])
-            && sameCampus(resource.data.universityKey)
-            && validCampusParticipants(resource.data.participants, resource.data.universityKey))
-          ||
-          (!resource.data.keys().hasAny(['universityKey'])
-            && resource.data.university == myProfile().university
-            && validCampusParticipants(resource.data.participants, myProfile().universityKey))
-        );
+        && resource.data.keys().hasAny(['universityKey'])
+        && sameCampus(resource.data.universityKey)
+        && (myProfile().membershipStatus == 'verified' || isStaff());
 
-      // Participants update message metadata; group admins manage group membership.
+      // Any participant can update last-message metadata. Only group admins
+      // can rename a group, add/remove users or change the admin list.
       allow update: if signedIn()
         && request.auth.uid in resource.data.participants
         && (
@@ -331,10 +370,9 @@ service cloud.firestore {
                 && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
                   'groupName', 'participants', 'admins', 'memberNames', 'updatedAt'
                 ]))
-            )
-          )
+            ))
           ||
-          // One-time migration of legacy direct conversations.
+          // One-time migration of direct chats created by the previous starter release.
           (!resource.data.keys().hasAny(['universityKey'])
             && resource.data.university == myProfile().university
             && resource.data.participants.size() == 2
@@ -347,20 +385,20 @@ service cloud.firestore {
         );
 
       allow delete: if signedIn()
-        && resource.data.type == 'group'
-        && request.auth.uid in resource.data.admins
-        && sameCampus(resource.data.universityKey);
+        && sameCampus(resource.data.universityKey)
+        && ((resource.data.type == 'group' && request.auth.uid in resource.data.admins)
+          || roleName() == 'admin');
 
       match /messages/{messageId} {
         function parentConversation() {
           return get(/databases/$(database)/documents/conversations/$(conversationId)).data;
         }
-
         function isConversationMember() {
           return signedIn()
             && request.auth.uid in parentConversation().participants
+            && parentConversation().keys().hasAny(['universityKey'])
             && sameCampus(parentConversation().universityKey)
-            && validCampusParticipants(parentConversation().participants, parentConversation().universityKey);
+            && (myProfile().membershipStatus == 'verified' || isStaff());
         }
 
         allow read: if isConversationMember();
@@ -386,9 +424,11 @@ service cloud.firestore {
             && request.auth.uid in request.resource.data.readBy)
         );
 
-        allow delete: if isConversationMember()
+        allow delete: if (isConversationMember()
           && parentConversation().type == 'group'
-          && request.auth.uid in parentConversation().admins;
+          && request.auth.uid in parentConversation().admins)
+          || (signedIn() && roleName() == 'admin'
+            && sameCampus(parentConversation().universityKey));
       }
     }
 
@@ -397,18 +437,262 @@ service cloud.firestore {
         && ((resource.data.keys().hasAny(['universityKey']) && sameCampus(resource.data.universityKey))
           || resource.data.university == myProfile().university)
         && (myProfile().membershipStatus == 'verified' || isStaff());
-
-      allow create: if isStaff()
+      allow create: if isVerifier()
         && request.resource.data.universityKey == myProfile().universityKey
         && request.resource.data.authorUid == request.auth.uid;
-
-      allow update, delete: if isStaff()
+      allow update, delete: if isVerifier()
         && sameCampus(resource.data.universityKey);
+    }
+
+    // Faculty-owned teaching content. Students can read only records for their campus.
+    match /academicItems/{itemId} {
+      allow read: if signedIn()
+        && resource.data.universityKey == myProfile().universityKey
+        && (myProfile().membershipStatus == 'verified' || isStaff());
+      allow create: if canPublishAcademic()
+        && request.resource.data.universityKey == myProfile().universityKey
+        && request.resource.data.authorUid == request.auth.uid
+        && request.resource.data.type in ['assignment', 'coursework', 'academic'];
+      allow update, delete: if signedIn()
+        && sameCampus(resource.data.universityKey)
+        && (roleName() == 'admin' || (roleName() == 'faculty' && resource.data.authorUid == request.auth.uid));
+    }
+
+    // Attendance is written by faculty/admin and visible to the student concerned or campus staff.
+    match /attendanceRecords/{recordId} {
+      allow read: if signedIn() && (
+        resource.data.studentUid == request.auth.uid
+        || staffForCampus(resource.data.universityKey)
+      );
+      allow create: if canPublishAcademic()
+        && request.resource.data.universityKey == myProfile().universityKey
+        && request.resource.data.markedBy == request.auth.uid
+        && request.resource.data.studentUid is string
+        && verifiedCampusStudent(request.resource.data.studentUid, myProfile().universityKey)
+        && request.resource.data.status in ['present', 'absent', 'late', 'excused'];
+      allow update: if canPublishAcademic()
+        && sameCampus(resource.data.universityKey)
+        && request.resource.data.universityKey == resource.data.universityKey
+        && request.resource.data.markedBy == request.auth.uid;
+      allow delete: if roleName() == 'admin' && sameCampus(resource.data.universityKey);
+    }
+
+    // Only the university administration publishes official holidays and shared timetable entries.
+    match /campusCalendar/{entryId} {
+      allow read: if signedIn()
+        && resource.data.universityKey == myProfile().universityKey
+        && (myProfile().membershipStatus == 'verified' || isStaff());
+      allow create: if signedIn() && roleName() == 'admin'
+        && request.resource.data.universityKey == myProfile().universityKey
+        && request.resource.data.createdBy == request.auth.uid;
+      allow update, delete: if signedIn() && roleName() == 'admin'
+        && sameCampus(resource.data.universityKey);
+    }
+
+    match /communityPosts/{postId} {
+      allow read: if signedIn()
+        && resource.data.universityKey == myProfile().universityKey
+        && (myProfile().membershipStatus == 'verified' || isStaff());
+      allow create: if signedIn()
+        && myProfile().membershipStatus == 'verified'
+        && request.resource.data.universityKey == myProfile().universityKey
+        && request.resource.data.authorUid == request.auth.uid
+        && request.resource.data.title is string
+        && request.resource.data.title.size() > 0
+        && request.resource.data.body is string
+        && request.resource.data.body.size() <= 1800;
+      allow update, delete: if signedIn()
+        && sameCampus(resource.data.universityKey)
+        && (resource.data.authorUid == request.auth.uid || roleName() == 'admin');
+    }
+
+    match /events/{eventId} {
+      allow read: if signedIn()
+        && resource.data.universityKey == myProfile().universityKey
+        && (myProfile().membershipStatus == 'verified' || isStaff());
+      allow create: if canManageGroups()
+        && request.resource.data.universityKey == myProfile().universityKey
+        && request.resource.data.createdBy == request.auth.uid;
+      allow update, delete: if signedIn()
+        && sameCampus(resource.data.universityKey)
+        && (roleName() == 'admin' || resource.data.createdBy == request.auth.uid);
+    }
+
+    match /clubs/{clubId} {
+      allow read: if signedIn()
+        && resource.data.universityKey == myProfile().universityKey
+        && (myProfile().membershipStatus == 'verified' || isStaff());
+      allow create: if canManageGroups()
+        && request.resource.data.universityKey == myProfile().universityKey
+        && request.resource.data.createdBy == request.auth.uid;
+      allow update: if signedIn() && sameCampus(resource.data.universityKey)
+        && (roleName() == 'admin' || resource.data.createdBy == request.auth.uid);
+      allow delete: if signedIn() && roleName() == 'admin'
+        && sameCampus(resource.data.universityKey);
+    }
+
+    match /clubMemberships/{membershipId} {
+      allow read: if signedIn() && (
+        resource.data.studentUid == request.auth.uid
+        || staffForCampus(resource.data.universityKey)
+      );
+      allow create: if signedIn()
+        && request.resource.data.studentUid == request.auth.uid
+        && request.resource.data.universityKey == myProfile().universityKey
+        && myProfile().membershipStatus == 'verified'
+        && request.resource.data.status == 'pending'
+        && exists(/databases/$(database)/documents/clubs/$(request.resource.data.clubId))
+        && get(/databases/$(database)/documents/clubs/$(request.resource.data.clubId)).data.universityKey == myProfile().universityKey
+        && get(/databases/$(database)/documents/clubs/$(request.resource.data.clubId)).data.openToJoin == true;
+      allow update: if staffForCampus(resource.data.universityKey)
+        && request.resource.data.studentUid == resource.data.studentUid
+        && request.resource.data.clubId == resource.data.clubId
+        && request.resource.data.status in ['active', 'rejected']
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'reviewedBy', 'reviewedAt']);
+      allow delete: if signedIn() && (request.auth.uid == resource.data.studentUid || staffForCampus(resource.data.universityKey));
+    }
+
+    match /eventRsvps/{rsvpId} {
+      allow read: if signedIn() && (resource.data.studentUid == request.auth.uid || staffForCampus(resource.data.universityKey));
+      allow create: if signedIn()
+        && request.resource.data.studentUid == request.auth.uid
+        && request.resource.data.universityKey == myProfile().universityKey
+        && myProfile().membershipStatus == 'verified';
+      allow update, delete: if signedIn() && (resource.data.studentUid == request.auth.uid || roleName() == 'admin')
+        && sameCampus(resource.data.universityKey);
+    }
+
+    // Channel metadata, memberships and messages are separate from direct-message conversations.
+    // This permits class-size groups without the 8-person limit used by legacy direct chats.
+    match /channels/{channelId} {
+      allow read: if signedIn()
+        && resource.data.universityKey == myProfile().universityKey
+        && (myProfile().membershipStatus == 'verified' || isStaff());
+      allow create: if canCreateChannel(request.resource.data.kind)
+        && request.resource.data.universityKey == myProfile().universityKey
+        && request.resource.data.createdByUid == request.auth.uid;
+      allow update: if signedIn() && sameCampus(resource.data.universityKey)
+        && (roleName() == 'admin' || resource.data.createdByUid == request.auth.uid)
+        && request.resource.data.universityKey == resource.data.universityKey
+        && request.resource.data.createdByUid == resource.data.createdByUid;
+      allow delete: if signedIn() && roleName() == 'admin'
+        && sameCampus(resource.data.universityKey);
+
+      match /messages/{messageId} {
+        function channelMemberActive() {
+          return signedIn()
+            && exists(channelMemberDoc(channelId, request.auth.uid))
+            && get(channelMemberDoc(channelId, request.auth.uid)).data.status == 'active';
+        }
+        function channelStaff() {
+          return signedIn()
+            && get(channelDoc(channelId)).data.universityKey == myProfile().universityKey
+            && isStaff();
+        }
+        allow read: if channelMemberActive() || channelStaff();
+        allow create: if (channelMemberActive() || channelStaff())
+          && request.resource.data.senderUid == request.auth.uid
+          && request.resource.data.text is string
+          && request.resource.data.text.size() > 0
+          && request.resource.data.text.size() <= 4000;
+        allow update: if (channelMemberActive() || channelStaff())
+          && resource.data.senderUid == request.auth.uid
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['text', 'edited', 'updatedAt']);
+        allow delete: if signedIn() && roleName() == 'admin' && channelStaff();
+      }
+    }
+
+    match /channelMemberships/{membershipId} {
+      allow read: if signedIn() && (
+        resource.data.userUid == request.auth.uid
+        || staffForCampus(resource.data.campusKey)
+      );
+      allow create: if signedIn()
+        && request.resource.data.userUid is string
+        && request.resource.data.channelId is string
+        && request.resource.data.campusKey == myProfile().universityKey
+        && exists(channelDoc(request.resource.data.channelId))
+        && get(channelDoc(request.resource.data.channelId)).data.universityKey == myProfile().universityKey
+        && (
+          (staffForCampus(request.resource.data.campusKey)
+            && (request.resource.data.userUid == request.auth.uid
+              || verifiedCampusStudent(request.resource.data.userUid, request.resource.data.campusKey))
+            && request.resource.data.status == 'active')
+          ||
+          (request.resource.data.userUid == request.auth.uid
+            && request.resource.data.status == 'pending'
+            && get(channelDoc(request.resource.data.channelId)).data.kind == 'club'
+            && exists(/databases/$(database)/documents/clubs/$(get(channelDoc(request.resource.data.channelId)).data.clubId))
+            && get(/databases/$(database)/documents/clubs/$(get(channelDoc(request.resource.data.channelId)).data.clubId)).data.openToJoin == true)
+          ||
+          (request.resource.data.userUid == request.auth.uid
+            && request.resource.data.status == 'active'
+            && myProfile().profileComplete == true
+            && myProfile().membershipStatus == 'verified'
+            && get(channelDoc(request.resource.data.channelId)).data.kind in ['class', 'subject', 'hostel', 'campus']
+            && get(channelDoc(request.resource.data.channelId)).data.enrollmentMode == 'auto'
+            && (get(channelDoc(request.resource.data.channelId)).data.kind == 'campus'
+              || ((!get(channelDoc(request.resource.data.channelId)).data.keys().hasAny(['department'])
+                || get(channelDoc(request.resource.data.channelId)).data.department == ''
+                || get(channelDoc(request.resource.data.channelId)).data.department == myProfile().department)
+              && (!get(channelDoc(request.resource.data.channelId)).data.keys().hasAny(['course'])
+                || get(channelDoc(request.resource.data.channelId)).data.course == ''
+                || get(channelDoc(request.resource.data.channelId)).data.course == myProfile().course)
+              && (!get(channelDoc(request.resource.data.channelId)).data.keys().hasAny(['year'])
+                || get(channelDoc(request.resource.data.channelId)).data.year == null
+                || get(channelDoc(request.resource.data.channelId)).data.year == myProfile().year)
+              && (!get(channelDoc(request.resource.data.channelId)).data.keys().hasAny(['hostel'])
+                || get(channelDoc(request.resource.data.channelId)).data.hostel == ''
+                || get(channelDoc(request.resource.data.channelId)).data.hostel == myProfile().hostel))))
+          ||
+          (request.resource.data.userUid == request.auth.uid
+            && request.resource.data.status == 'active'
+            && myProfile().profileComplete == true
+            && myProfile().membershipStatus == 'verified'
+            && get(channelDoc(request.resource.data.channelId)).data.kind in ['class', 'subject']
+            && get(channelDoc(request.resource.data.channelId)).data.enrollmentMode == 'featured'
+            && (!get(channelDoc(request.resource.data.channelId)).data.keys().hasAny(['department'])
+              || get(channelDoc(request.resource.data.channelId)).data.department == myProfile().department)
+            && (!get(channelDoc(request.resource.data.channelId)).data.keys().hasAny(['course'])
+              || get(channelDoc(request.resource.data.channelId)).data.course == myProfile().course)
+            && (!get(channelDoc(request.resource.data.channelId)).data.keys().hasAny(['year'])
+              || get(channelDoc(request.resource.data.channelId)).data.year == null
+              || get(channelDoc(request.resource.data.channelId)).data.year == myProfile().year))
+        );
+      allow update: if staffForCampus(resource.data.campusKey)
+        && request.resource.data.userUid == resource.data.userUid
+        && request.resource.data.channelId == resource.data.channelId
+        && request.resource.data.campusKey == resource.data.campusKey
+        && request.resource.data.status in ['active', 'pending', 'rejected']
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt']);
+      allow delete: if signedIn() && (roleName() == 'admin' || request.auth.uid == resource.data.userUid)
+        && sameCampus(resource.data.campusKey);
+    }
+
+    match /hostelAllocations/{allocationId} {
+      allow read: if signedIn() && (resource.data.studentUid == request.auth.uid || (canManageHostel() && sameCampus(resource.data.universityKey)));
+      allow create: if canManageHostel()
+        && request.resource.data.universityKey == myProfile().universityKey
+        && request.resource.data.createdBy == request.auth.uid
+        && verifiedCampusStudent(request.resource.data.studentUid, myProfile().universityKey);
+      allow update, delete: if canManageHostel() && sameCampus(resource.data.universityKey);
+    }
+
+    // Restrictions disable NeonVerse access; they do not delete or disable the Firebase Auth account.
+    match /userModeration/{uid} {
+      allow read: if signedIn() && (request.auth.uid == uid || (roleName() == 'admin' && sameCampus(resource.data.universityKey)));
+      allow create: if signedIn() && roleName() == 'admin'
+        && request.resource.data.universityKey == myProfile().universityKey
+        && request.resource.data.userUid == uid;
+      allow update: if signedIn() && roleName() == 'admin'
+        && sameCampus(resource.data.universityKey)
+        && request.resource.data.universityKey == myProfile().universityKey
+        && request.resource.data.userUid == uid;
+      allow delete: if signedIn() && roleName() == 'admin' && sameCampus(resource.data.universityKey);
     }
 
     match /notifications/{recipientUid}/items/{notificationId} {
       allow read: if signedIn() && request.auth.uid == recipientUid;
-
       allow create: if signedIn()
         && request.resource.data.fromUid == request.auth.uid
         && request.resource.data.universityKey == myProfile().universityKey
@@ -423,11 +707,9 @@ service cloud.firestore {
             && get(/databases/$(database)/documents/campusChangeRequests/$(request.resource.data.requestId)).data.requestedUniversityKey == myProfile().universityKey
             && get(/databases/$(database)/documents/campusChangeRequests/$(request.resource.data.requestId)).data.status in ['approved', 'rejected'])
         );
-
       allow update: if signedIn()
         && request.auth.uid == recipientUid
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read', 'readAt']);
-
       allow delete: if signedIn() && request.auth.uid == recipientUid;
     }
 

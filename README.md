@@ -1,162 +1,253 @@
-# NeonVerse — updated campus workspace
+# NeonVerse — University & Campus Management Edition
 
-NeonVerse is a vanilla HTML/CSS/JavaScript web app using Firebase Authentication and Cloud Firestore, designed to run on the Firebase Spark plan and deploy as a static site on Vercel. It does not require React, a build command, Firebase Storage or Cloud Functions.
+NeonVerse is a static, responsive HTML/CSS/JavaScript university workspace connected to Firebase Authentication and Cloud Firestore. It is designed for a controlled campus pilot and can be deployed to Vercel without React, a build tool, Firebase Storage, or Cloud Functions.
 
-This update fixes the original chat write order and replaces the old two-person-only chat rules with campus-scoped direct and group conversations. It also adds navigation history, responsive mobile chat navigation, required-profile gating, campus verification, case-insensitive search, group administration, message editing/deletion and in-app notifications.
+This edition expands the earlier student/Warden application into four role-aware experiences:
 
-## Included and working in this release
+- **Student** — campus identity, directory, teacher connectivity, messages, class/subject channels, applications, notices, academics, attendance, clubs/events and hostel requests.
+- **Warden** — hostel operations, resident requests, room allocations, hostel notices, hostel groups and student chat-access verification.
+- **Faculty** — faculty directory presence, course/subject groups, assignment publishing, attendance entry/update, official notices, student verification and club/event coordination.
+- **University Administrator** — campus approvals, office calendar (holidays, timetable and exam/deadline entries), campus notices, club/event governance, group oversight and temporary/permanent NeonVerse account restrictions.
+
+> **Important:** This is not an official LPU ERP/UMS, SIS, LMS or attendance-system integration. “Teacher connectivity” currently means the campus directory, faculty profile presence and same-campus messaging. Live synchronisation with LPU systems requires written institutional approval, official API/SSO documentation and a trusted backend integration.
+
+## 1. Features in this build
+
+### Identity, onboarding and access control
 
 - Email/password and Google sign-in.
-- Warden/admin sign-in based on manually provisioned Firebase role records.
-- Required student onboarding: name, university, registration ID, department, course and year.
-- Workspace navigation with a Back button and mobile navigation drawer.
-- Responsive dashboard, profile, applications, hostel request forms, notices, settings and theme toggle.
-- Case-insensitive people and chat search by name, university email, phone, registration ID, department and course (within the profiles returned by the campus query).
-- Student directory and direct messages limited to verified members of the same canonical campus.
-- Chat feed contains only conversations the signed-in user has started or joined. It does not list every student.
-- Direct and group text conversations; group creation supports up to 8 members including the creator.
-- Live message updates, read/seen indicators, search within a conversation, edit own messages and soft-delete own messages for everyone.
-- Group admins can rename the group, add/remove users, promote/demote admins and delete the group and its messages.
-- Larger in-app notification inbox for messages, application decisions and campus-transfer decisions, with unread counts, mark-all-read and delete controls.
-- Student application submission/cancellation and staff approval, rejection or escalation.
-- Campus transfer requests; an administrator/verifier at the destination campus must approve before the student's campus is changed.
-- Administrator/verifier queue for approving pending student membership.
-- Firestore rules and suggested composite indexes.
+- Student signup with required profile fields: full name, university, registration ID, department, course and year.
+- Profile-completion percentage and a guided first-run website tour; the tour can be restarted from Settings.
+- Role-based views for Student, Warden, Faculty and University Admin.
+- Staff roles are provisioned by an authorised project owner using Firestore `roles/{uid}` records. No Warden/Faculty/Admin email addresses are hard-coded in the frontend.
+- A completed student's membership starts as `pending`. A Warden, Faculty member or University Admin can verify or reject the campus profile. Directory and chat access are gated until approval.
+- Campus-scoped student and faculty directory; profile cards can start a direct conversation.
+- Existing campus alias normalisation includes LPU / Lovely Professional University / Phagwara variants. Add aliases only after deciding the canonical campus identity used by the institution.
 
-## Search coverage and personal-data warning
+### Chat and campus communication
 
-The current client-side campus search loads up to 150 verified profiles for the active campus, then performs case-insensitive matching by name, email, phone, registration ID, department and course in the browser. This is suitable for a prototype or a small pilot, but it is not a scalable university-wide search index. For a large campus, use a dedicated indexed search service or a trusted server-side search endpoint.
+- Direct messages and small private groups (up to 8 participants) with edit/delete controls, read indicators and notification inbox.
+- Separate large-group channels for class, subject, hostel, campus and club spaces.
+- Faculty can create class/subject groups and automatically enrol verified students matching the selected department, course and year. Warden can create hostel groups. Admin can create class, subject, hostel and campus groups.
+- Club channels are created with a club. Students can request membership; staff can review club requests.
+- Admin can delete channels. The new channels are separate from the older 8-person direct/group chat system.
+- The channel auto-enrol feature currently has a **250-member pilot limit per channel** and reads at most 250 matching profiles. Divide larger cohorts by section/tutorial group.
+- Message bodies are text-only in this edition. Attachments, voice/video calls, typing indicators and push notifications are not included.
 
-Important privacy point: the current rules grant verified same-campus members read access to the campus profile document so the browser can search it. That means fields stored in that same document (including email, phone and registration ID) are visible to those members, not just the fields displayed in the UI. Firestore Rules grant or deny document reads; they do not hide individual fields within a readable document. Do not load real student contact details until the institution approves this visibility or the app is redesigned to separate private contact data from searchable directory data.
+### Academics — Faculty-managed
 
-## Features not included yet
+- Faculty can publish assignments with subject, instructions, due date and optional department/course/year targeting.
+- Faculty can record or update per-student attendance for a subject/date, using Present, Absent, Late or Excused.
+- Students see assignments matching their programme and their attendance records.
+- Faculty workspace shows campus roster counts, coursework counts, attendance records and shortcuts to class communication.
+- Faculty, not students, have write permission for assignments and attendance. University Admin can maintain the shared academic calendar but cannot mark attendance through this UI.
 
-This build does not provide file/image attachments, Firebase Storage, voice/video calls, typing indicators, push notifications, attendance sync, a live timetable, assignment/exam management, event/club administration, online payments, AI Agent37, or PDF export. The Academics and Events screens are clearly marked as not connected instead of showing fake working buttons. Emergency services are not contacted by this website.
+### University office — Admin-managed
 
-## 1. Add your Firebase web configuration
+- Admin can publish campus holidays, timetable entries, exam dates and academic deadlines.
+- Admin workspace includes student verification, channel oversight and moderation records.
+- Admin can create events and clubs, publish official notices, and delete campus channels.
+- Temporary or permanent restrictions are enforced by the NeonVerse sign-in flow. This is an application-level restriction; it does **not** disable or delete the Firebase Authentication account. A production deployment should use a trusted Admin SDK/backend to disable accounts or issue claims where required.
 
-1. Open Firebase Console → Project settings → General → Your apps → your NeonVerse Web app.
-2. Copy the full Firebase Web App configuration.
-3. Open `firebase-config.js` and replace all placeholder values. The file should look like:
+### Warden — Hostel operations
+
+- Warden workspace for hostel request queue, verified campus residents and room-allocation records.
+- Warden can record student hostel/block and room allocations.
+- Students can submit room requests, maintenance requests, visitor-pass requests, mess feedback and hostel leave applications.
+- Warden can review applications through the shared Applications queue, publish hostel notices and create hostel channels.
+- Emergency services are not contacted by this website. Use the institution's official emergency contact for urgent situations.
+
+### Campus life and applications
+
+- Two notice areas: **Official notice board** (Warden/Faculty/Admin) and **Casual campus board** (verified students can share non-sensitive campus posts).
+- Staff can create clubs and events; students can request club membership and RSVP to events.
+- Dashboard shortcuts include three common application categories: Hostel Leave, Maintenance Request and Academic Support. The Applications area also supports other request types, review comments and status changes.
+- Existing application workflow supports submission, cancellation while pending, staff review, approval, rejection and escalation.
+- Campus transfer requests require destination-campus staff approval.
+
+## 2. Files included
+
+| File | Purpose |
+|---|---|
+| `index.html` | Landing page, authentication views and app shell |
+| `style.css` | Responsive layouts, themes, modals, navigation and workspace styling |
+| `script.js` | Firebase authentication, role routing, UI actions and Firestore data operations |
+| `firebase-config.js` | Public Firebase Web App configuration placeholders |
+| `firestore.rules` | Role- and campus-aware Firestore security rules |
+| `firestore.indexes.json` | Composite indexes for the app's multi-field queries |
+| `firebase.json` | Firebase CLI config for deploying Firestore rules and indexes |
+
+## 3. Firebase setup
+
+### Step A — Create or use your Firebase project
+
+1. Open Firebase Console and select your project.
+2. Open **Project settings → General → Your apps**.
+3. Register a Web App if you have not already done so.
+4. Copy the Web App configuration values into `firebase-config.js`.
+5. Do not place a service-account private key in frontend files. The Firebase Web config is public; Firestore Rules control database access.
+
+Example format (replace every placeholder with the values from your Firebase Console):
 
 ```js
 export const firebaseConfig = {
-  apiKey: "YOUR_REAL_API_KEY",
+  apiKey: "YOUR_API_KEY",
   authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
   projectId: "YOUR_PROJECT_ID",
-  appId: "YOUR_REAL_APP_ID"
+  appId: "YOUR_APP_ID"
 };
 ```
 
-Use the exact values shown by Firebase. Do not paste a service-account private key into this file. The Web App config is meant to be public; database access is controlled by Firestore Rules.
+### Step B — Enable Authentication
 
-## 2. Firebase Authentication
-
-In Authentication → Sign-in method, enable:
+In **Firebase Console → Authentication → Sign-in method**, enable:
 
 - Email/Password
-- Google
+- Google (optional)
 
-In Authentication → Settings → Authorized domains, add `localhost` for local testing and your Vercel domain after deployment.
+Under **Authentication → Settings → Authorized domains**, include `localhost` for local testing and your deployed Vercel hostname.
 
-## 3. Publish the new Firestore Rules
+### Step C — Create Firestore Database and publish rules
 
-1. Open Firebase Console → Firestore Database → Rules.
-2. Replace the old rules with the complete contents of `firestore.rules` from this updated package.
-3. Click **Publish**.
+1. Open **Firestore Database** and create the database in the intended region.
+2. Open **Firestore Database → Rules**.
+3. Replace the rules with the complete `firestore.rules` file in this package.
+4. Click **Publish**.
+5. Never replace these rules with open/test rules such as `allow read, write: if true`.
 
-Important: the new rules are stricter than the original rules. Publish them before testing chat. A signed-in student must complete their profile and have `membershipStatus: "verified"` before the directory and messaging become available.
+The rules deny role-document writes from the client. They scope student/faculty/hostel channels and records to a campus key and distinguish the write privileges of each staff role.
 
-## 4. Create the Firestore indexes
+### Step D — Deploy composite indexes
 
-The app uses compound queries. Deploy the included `firestore.indexes.json` with the Firebase CLI if you have it configured, or use the **Create index** link that Firebase shows when a query first runs.
-
-Required collection indexes:
-
-| Collection | Fields |
-|---|---|
-| `profiles` | `universityKey` Ascending + `membershipStatus` Ascending |
-| `conversations` | `participants` Array contains + `universityKey` Ascending |
-| `applications` | `universityKey` Ascending + `status` Ascending |
-| `applications` | `studentUid` Ascending + `createdAt` Descending |
-| `campusChangeRequests` | `requestedUniversityKey` Ascending + `status` Ascending |
-| `conversations` (legacy migration) | `participants` Array contains + `university` Ascending |
-| `applications` (legacy records) | `university` Ascending + `status` Ascending |
-
-Wait for each index to say **Enabled** before testing that section. Your earlier `applications` index (`studentUid`, `createdAt`, `__name__`) is the student-application index; the updated app may request additional indexes. The package now includes `firebase.json`, so a Firebase CLI user can deploy both rules and index definitions from this folder with `firebase deploy --only firestore:rules,firestore:indexes` after running `firebase use` for the `neonverse-18e00` project. Alternatively, paste the rules in the Firebase Console and create each index from the error link as Firebase requests it. For CLI deployment, install Firebase CLI, run `firebase login`, select the project with `firebase use --add` (choose `neonverse-18e00`), then run `firebase deploy --only firestore:rules,firestore:indexes`.
-
-## 5. Campus membership verification
-
-The university name alone is not proof of enrolment. This version separates profile completion from membership verification:
-
-1. A student signs up and completes the required profile.
-2. The student's `membershipStatus` starts as `pending`.
-3. A university administrator or college verifier checks the registration ID against real university records.
-4. The verifier opens Student directory → Pending student verification and clicks **Verify**.
-5. Only verified users can search the campus directory, start direct conversations or join group chats.
-
-For the very first admin/verifier, the project owner can create `roles/{firebaseAuthUid}` in Firestore with `role: "admin"` or `role: "verifier"`. The role document is trusted and cannot be created/changed by the website itself. The admin/verifier should complete their profile and have `profiles/{uid}.membershipStatus` set to `verified` by the project owner (or have another authorised verifier verify them).
-
-For a warden, create `roles/{uid}` with `role: "warden"`. Wardens can review applications and publish notices. The admin/verifier role is the one allowed to approve student membership and destination-campus transfers. If a warden or faculty member should also participate in student chats, set that staff profile's `membershipStatus` to `verified` after confirming their campus affiliation; the chat rules check every participant profile, including staff.
-
-## 6. University abbreviations and case-insensitive matching
-
-Search matching is case-insensitive. The initial alias map treats `LPU`, `lpu`, `Lovely Professional University`, and `Lovely Professional University (LPU)` as the same canonical campus key.
-
-To add another official university short form, edit `CAMPUS_ALIASES` near the top of `script.js`, for example:
-
-```js
-const CAMPUS_ALIASES = {
-  lpu: "lovely-professional-university",
-  lovelyprofessionaluniversity: "lovely-professional-university",
-  iitm: "indian-institute-of-technology-madras",
-  indianinstituteoftechnologymadras: "indian-institute-of-technology-madras"
-};
-```
-
-The key is built from the alias target after normalisation. Add both the short form and the full-name normalised form. Use official aliases supplied by the university; do not map unrelated institutions to the same key.
-
-A student who needs to join another university can use **My profile → Request campus change**. The destination campus admin/verifier must approve the request. After the transfer, the student is pending verification in the new campus until the destination verifier confirms enrolment.
-
-## 7. Run locally on Mac
-
-Open Terminal in the NeonVerse folder and run:
+The package includes `firestore.indexes.json`. From a terminal where Firebase CLI is installed and configured for this project, run:
 
 ```bash
-python3 -m http.server 5500
+firebase login
+firebase use YOUR_PROJECT_ID
+firebase deploy --only firestore:rules,firestore:indexes
 ```
 
-Then open `http://localhost:5500`. Do not open `index.html` by double-clicking it; the JavaScript modules need to be served over HTTP.
+Alternatively, when Firestore shows a missing-index error, open the Firebase-provided link and create that exact index. Wait until its status is **Enabled**. Do not guess a different index definition.
 
-## 8. Deploy on Vercel
+### Step E — Configure and deploy on Vercel
 
-1. Upload the contents of this folder to the root of your GitHub repository.
-2. Import that repository into Vercel.
-3. Framework preset: **Other**.
-4. Build command: leave empty.
-5. Output directory: `.`.
-6. Deploy, then add the Vercel hostname to Firebase Authentication → Settings → Authorized domains.
+1. Keep the project files together in the repository root: `index.html`, `style.css`, `script.js`, `firebase-config.js` and Firebase config files.
+2. Commit and push the files to GitHub.
+3. Import the repository into Vercel, or push to the already-connected Vercel repository.
+4. Use no build command and no output directory for this plain static website (unless your Vercel project already has a working static configuration).
+5. Add the deployed Vercel domain to Firebase Authentication's authorized domains.
+6. Open the deployed site and test with a student account and each provisioned staff role.
 
-## Data model
+## 4. How to add Warden, Faculty and Admin login accounts
 
-- `profiles/{uid}` — student/staff profile, canonical `universityKey`, `membershipStatus`.
-- `roles/{uid}` — trusted staff role assigned by the project owner.
-- `applications/{id}` — student requests and review state.
-- `campusChangeRequests/{id}` — requests to move to a new campus, reviewed by the destination verifier.
-- `conversations/{id}` — direct or group metadata, participant UIDs, group admins and last-message summary.
-- `conversations/{id}/messages/{id}` — text messages, edit/delete state and read receipts.
-- `notices/{id}` — campus announcements.
-- `notifications/{uid}/items/{id}` — in-app notification inbox.
+There are **no pre-approved email IDs** inside the ZIP. The trusted role is attached to the Firebase Authentication UID, not to a frontend email comparison. This prevents someone from becoming staff simply by typing a staff email address into a public form.
 
-## Troubleshooting
+Repeat these steps for each intended Warden, Faculty member and Administrator:
 
-- **Missing or insufficient permissions:** first confirm that the new `firestore.rules` have been published. Then check that your profile is complete, `membershipStatus` is `verified` for chat, and staff roles are provisioned in `roles/{uid}`.
-- **New students cannot see directory/chat:** their membership is still pending. An admin/verifier must check their registration ID and approve them.
-- **Firestore index required:** open the creation link, create the exact suggested index and wait for Enabled.
-- **Message send rejected:** the conversation record is created before its first message in this version. If it still fails, check the conversation's university key and that every member is verified in the same campus.
-- **Google sign-in rejected:** add the current hostname to Authentication → Settings → Authorized domains.
-- **Campus abbreviation not matching:** add the official short form and full university name to `CAMPUS_ALIASES` in `script.js`.
+1. Ask the person to create an account in NeonVerse using their official university email, or create the account through Firebase Authentication if the university controls account onboarding.
+2. In Firebase Console, open **Authentication → Users**.
+3. Find the account and copy its **User UID** exactly.
+4. Open **Firestore Database → Data → Start collection** (or open the existing collection) and create a collection named `roles`.
+5. Create a document whose **Document ID is exactly the copied UID**.
+6. Add one string field named `role` with exactly one of these values:
 
-## Important deployment warning
+   | Staff type | `role` value |
+   |---|---|
+   | Warden | `warden` |
+   | Faculty / teacher | `faculty` |
+   | University administrator / office | `admin` |
 
-This is a more capable starter, not a security-audited production university system. Do not use real student records until the institution has reviewed the rules, membership-verification process, retention policy, moderation/reporting workflow and privacy obligations. Text chat currently has no file attachments, encryption beyond Firebase's transport/storage controls, blocking/reporting UI, or push notifications. The browser does not contain a secret warden ID; trusted roles are managed in Firebase.
+7. Save the document. Ask that staff member to sign out and sign in again using **Staff access** (or their normal sign-in tab). The app reads the role record and shows the correct workspace.
+8. Have the staff member complete their campus profile with the **same university name/campus key** used for student accounts. A pre-authorised staff profile is marked verified after it is complete.
+
+**Example:** if a Firebase Auth user has UID `abc123...`, create `roles/abc123...` and set `role` to `warden`. Do not use the email address as the Firestore document ID. Do not put role fields into `profiles` manually as a substitute for the trusted `roles` record.
+
+Keep the first `admin` role under the control of the project owner / institution IT team. Do not let students create or edit `roles` documents. A Warden or Faculty member cannot promote themselves to Admin through the website.
+
+## 5. Student verification and chat approval
+
+1. A student signs up and completes the required identity and academic profile fields.
+2. Their profile is created with `membershipStatus: "pending"`.
+3. The university verifies the registration details using its real records.
+4. An authorised Warden, Faculty member or Admin opens **Student directory → Pending student verification** or the Admin approval screen and approves/rejects the student.
+5. Only after approval does the student get directory and campus chat access.
+
+Do not approve accounts based only on a self-entered university name or email suffix. The current app gives staff a manual review flow; it does not independently query the university student registry.
+
+## 6. Important collection/data model
+
+| Firestore collection | Main purpose |
+|---|---|
+| `roles/{uid}` | Trusted role assignment; owner-managed only |
+| `profiles/{uid}` | Campus identity, student/faculty directory profile, membership status |
+| `applications/{id}` | Hostel, maintenance, leave, academic support and other requests |
+| `conversations/{id}/messages/{id}` | Direct and small private group chats |
+| `channels/{id}` and `/messages/{id}` | Class, subject, hostel, campus and club group chats |
+| `channelMemberships/{channelId_uid}` | Active/pending channel membership and auto-enrolment |
+| `notices/{id}` | Official campus notices |
+| `communityPosts/{id}` | Casual student community board |
+| `academicItems/{id}` | Faculty assignments/coursework |
+| `attendanceRecords/{id}` | Subject/date/student attendance entries |
+| `campusCalendar/{id}` | Admin-published holidays, timetable, exam and deadline entries |
+| `clubs/{id}`, `clubMemberships/{id}` | Campus clubs and membership requests |
+| `events/{id}`, `eventRsvps/{id}` | Campus events and RSVP records |
+| `hostelAllocations/{id}` | Warden-managed room allocation records |
+| `userModeration/{uid}` | Admin-issued temporary/permanent workspace restrictions |
+| `notifications/{uid}/items/{id}` | In-app notifications |
+| `campusChangeRequests/{id}` | Destination-campus transfer review |
+
+## 7. Role capability matrix
+
+| Area | Student | Warden | Faculty | Admin |
+|---|---:|---:|---:|---:|
+| Complete own profile / tour | Yes | Yes | Yes | Yes |
+| Approve student campus/chat access | No | Yes | Yes | Yes |
+| Directory and direct messages | Verified only | Yes | Yes | Yes |
+| Class / subject channel creation | No | No | Yes | Yes |
+| Hostel channel creation | No | Yes | No | Yes |
+| Campus group governance / deletion | No | Limited | Limited | Yes |
+| Publish assignments | No | No | Yes | No |
+| Mark/update attendance | No | No | Yes | No |
+| Publish holidays / timetable / exams | No | No | No | Yes |
+| Hostel allocation desk | Own allocation | Yes | No | Yes |
+| Hostel requests | Submit | Review | Review as campus staff | Review |
+| Official notice publishing | No | Yes | Yes | Yes |
+| Casual campus posts | Verified users | Yes | Yes | Yes |
+| Create clubs / events | No | Yes | Yes | Yes |
+| Restrict / restore NeonVerse accounts | No | No | No | Yes |
+| Assign trusted roles | No | No | No | No — owner-only in Firebase Console |
+
+## 8. LPU teacher / university-system connectivity
+
+This build supports teacher discovery and contact through verified campus profiles, role labels, direct chats and class/subject channels. It does **not** log in to or scrape an LPU portal, import the official faculty directory, sync the university timetable, read official attendance, or connect to an LMS/ERP automatically.
+
+For official integration, LPU's authorised IT team would need to provide one or more approved interfaces such as SSO/OIDC/SAML, a documented REST API, a sanctioned SIS/LMS integration, or an authorised data export. Put privileged credentials and sync jobs on a trusted backend—not in `script.js` or `firebase-config.js`. Confirm data-protection, consent, retention and access rules before importing student records.
+
+## 9. Pilot limitations and production checklist
+
+- **No live Firebase verification was performed while packaging this ZIP.** The JavaScript syntax and JSON index file are checked locally, but you must publish and test the Firestore Rules in your Firebase project. A Firebase Rules compiler/emulator and live end-to-end tests were not available in this packaging run.
+- This is a frontend + Firebase client implementation. Use the Firebase Emulator Suite and test with separate Student/Warden/Faculty/Admin accounts before real student data is added.
+- Same-campus profile documents currently contain directory fields such as email, phone and registration ID. Firestore Rules grant document-level reads, not field-level privacy. Before using real student data, separate public directory fields from private contact/identity fields and review disclosure with the institution.
+- Manual student verification is not equivalent to an authoritative LPU registry check.
+- Account restrictions block the NeonVerse workspace only; they do not disable Firebase Authentication.
+- Large-group creation can write up to 250 membership documents in one operation set. Bigger classes should be split into smaller sections until a trusted backend/batched enrolment process is implemented.
+- Group/channel deletion currently processes a bounded client-side set of records; large-scale cleanup should be moved to a trusted backend.
+- No file attachments, Firebase Storage, video/audio, real-time push notifications, payment processing, biometric attendance, ERP sync or emergency dispatch are included.
+- Add institution-approved retention, moderation, audit logs, accessibility review, backups and an incident-response process before production use.
+
+## 10. Local development
+
+You can serve the static files with any local HTTP server. For example, from the folder containing `index.html`:
+
+```bash
+python -m http.server 8000
+```
+
+Then open `http://localhost:8000` and ensure `localhost` is an authorised Firebase Authentication domain.
+
+Before deployment, check JavaScript syntax with:
+
+```bash
+node --check script.js
+```
+
