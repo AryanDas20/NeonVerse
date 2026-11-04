@@ -1,7 +1,7 @@
 /*
  * NeonVerse AI Work — controlled Agent37 task planner.
- * Agent37 proposes a small, allow-listed plan. NeonVerse re-checks it and
- * requires a staff member to confirm before Firestore writes are attempted.
+ * Agent37 proposes a bounded, allow-listed plan. NeonVerse independently
+ * re-checks identity, role, campus and current record state before execution.
  * The Agent37 key is server-side only.
  */
 const crypto = require('node:crypto');

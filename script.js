@@ -1253,7 +1253,8 @@ async function globalSearch() {
 }
 // Agent37 chat widget. Secrets stay in the Vercel serverless function; the
 // browser sends only a Firebase ID token, the user's message and display context.
-let aiWorkPlan = null, aiWorkBusy = false;
+// AI Work state is declared once near renderAiWorkPlan above.
+
 let agent37Busy = false;
 let agent37ConversationId = null;
 let agent37History = [];
