@@ -4,8 +4,8 @@ import {
   signInWithEmailAndPassword, onAuthStateChanged, signOut, updateProfile
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
 import {
-  getFirestore, doc, getDoc, setDoc, updateDoc, deleteDoc, collection, addDoc, getDocs,
-  query, where, orderBy, limit, onSnapshot, serverTimestamp, arrayUnion
+  getFirestore, doc, getDoc, setDoc, updateDoc, deleteDoc, collection, addDoc, getDocs, getDocsFromServer,
+  query, where, orderBy, limit, onSnapshot, serverTimestamp, arrayUnion, getDocFromServer
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
 import { firebaseConfig } from "./firebase-config.js";
 
@@ -25,6 +25,7 @@ const configured = Boolean(firebaseConfig?.apiKey && !firebaseConfig.apiKey.star
 let auth, db, currentUser = null, currentProfile = null;
 let authMode = "signin", roleMode = false, activeConversation = null;
 let unsubscribeMessages = null, unsubscribeNotifications = null;
+let unsubscribeProfile = null, unsubscribeRole = null;
 let currentPage = "overview", pageHistory = [], tourIndex = 0, lockedModal = false;
 let conversationCache = [], peopleCache = [], peopleSearchTimer = null;
 const $ = id => document.getElementById(id);
@@ -84,7 +85,9 @@ function friendlyAuthError(error) {
   return messages[error?.code] || error?.message || "Something went wrong. Please try again.";
 }
 async function getRole(uid) {
-  const roleSnap = await getDoc(doc(db, "roles", uid));
+  // Always read the authoritative role document from Firestore, not a stale
+  // browser cache. The user may have just been promoted by the project owner.
+  const roleSnap = await getDocFromServer(doc(db, "roles", uid));
   return roleSnap.exists() ? roleSnap.data().role : "student";
 }
 async function ensureProfile(user, extra = {}) {
@@ -110,6 +113,65 @@ async function ensureProfile(user, extra = {}) {
   if (Object.keys(migration).length) { migration.updatedAt = serverTimestamp(); await updateDoc(ref, migration); }
   return profile;
 }
+async function refreshCurrentProfileFromServer() {
+  if (!currentUser || !db) return currentProfile;
+  const [profileSnap, roleSnap] = await Promise.all([
+    getDocFromServer(doc(db, "profiles", currentUser.uid)),
+    getDocFromServer(doc(db, "roles", currentUser.uid))
+  ]);
+  if (!profileSnap.exists()) throw new Error("Your campus profile could not be found. Sign out and sign in again.");
+  const profile = profileSnap.data();
+  const assignedRole = roleSnap.exists() ? (roleSnap.data().role || "student") : "student";
+  currentProfile = {...profile, uid:currentUser.uid, role:assignedRole, profileRole:profile.role || "student"};
+  return currentProfile;
+}
+function stopSessionWatchers() {
+  if (unsubscribeProfile) unsubscribeProfile();
+  if (unsubscribeRole) unsubscribeRole();
+  unsubscribeProfile = null;
+  unsubscribeRole = null;
+}
+function watchSessionDocuments() {
+  stopSessionWatchers();
+  if (!currentUser || !db) return;
+  unsubscribeProfile = onSnapshot(doc(db, "profiles", currentUser.uid), snapshot => {
+    if (!snapshot.exists() || !currentUser) return;
+    const incoming = snapshot.data();
+    const previousStatus = currentProfile?.membershipStatus;
+    const previousCampus = currentProfile?.universityKey;
+    const previousComplete = currentProfile?.profileComplete;
+    currentProfile = {...incoming, uid:currentUser.uid, role:currentProfile?.role || incoming.role || "student", profileRole:incoming.role || "student"};
+    // The first listener event can already contain a newer server value than
+    // the profile read used during sign-in. Do not ignore that first change.
+    const changed = previousStatus !== incoming.membershipStatus
+      || previousCampus !== incoming.universityKey
+      || previousComplete !== incoming.profileComplete;
+    firstProfileSnapshot = false;
+    if (changed) {
+      if (incoming.membershipStatus === "verified") {
+        autoEnrollStudentIntoMatchingChannels({...incoming, uid:currentUser.uid}).catch(error => console.warn("Automatic channel enrolment skipped", error));
+      }
+      renderPage(currentPage, false).catch(error => console.warn("Workspace refresh after profile update failed", error));
+    }
+  }, error => console.warn("Profile status listener failed", error));
+  unsubscribeRole = onSnapshot(doc(db, "roles", currentUser.uid), snapshot => {
+    if (!currentUser || !currentProfile) return;
+    const assignedRole = snapshot.exists() ? (snapshot.data().role || "student") : "student";
+    if (assignedRole !== currentProfile.role) {
+      currentProfile = {...currentProfile, role:assignedRole};
+      configureNavigation();
+      if (["warden", "faculty", "admin"].includes(assignedRole)) {
+        syncAssignedStaffProfile().then(() => renderPage(currentPage, false)).catch(error => {
+          console.error("Staff profile setup failed", error);
+          toast("Staff role was found, but profile setup was blocked. Check the published Firestore rules.");
+        });
+      } else {
+        renderPage(currentPage, false).catch(error => console.warn("Workspace refresh after role change failed", error));
+      }
+    }
+  }, error => console.warn("Role listener failed", error));
+}
+
 async function finishLogin(user, extra = {}) {
   currentUser = user;
   try {
@@ -126,7 +188,11 @@ async function finishLogin(user, extra = {}) {
       }
     }
     await syncAssignedStaffProfile();
+    // Re-read the profile and the role from the server after any staff self-sync.
+    // This prevents an older cached "pending" value from surviving a new login.
+    await refreshCurrentProfileFromServer();
     if (currentProfile.membershipStatus === "verified") await autoEnrollStudentIntoMatchingChannels(currentProfile).catch(error => console.warn("Channel enrolment sync skipped", error));
+    watchSessionDocuments();
     $("auth-screen").classList.add("hidden"); $("landing").classList.add("hidden"); $("app-shell").classList.remove("hidden");
     configureNavigation();
     await loadWorkspace();
@@ -435,20 +501,21 @@ async function processCampusChange(id, request, status) {
 async function getCampusPeople() {
   const q = query(collection(db,"profiles"), where("universityKey","==",currentProfile.universityKey), where("membershipStatus","==","verified"), limit(150));
   const snap = await getDocs(q);
-  return snap.docs.map(item => ({uid:item.id,...item.data()})).filter(person => person.uid !== currentUser.uid && person.profileComplete !== false && person.membershipStatus === "verified");
+  return snap.docs.map(item => ({...item.data(),uid:item.id})).filter(person => person.uid !== currentUser.uid && person.profileComplete !== false && person.membershipStatus === "verified");
 }
 function personCard(person) {
   const searchable = normaliseSearch([person.name,person.collegeId,person.email,person.phone,person.department,person.course,person.year].join(" "));
   return `<article class="content-card person-card" data-search="${esc(searchable)}"><div style="display:flex;align-items:center;gap:11px"><div class="user-avatar">${esc(initials(person.name))}</div><div><b style="font-size:13px">${esc(person.name)}</b><div class="text-muted" style="font-size:11px;margin-top:4px">${esc(person.department||"Campus member")} · ${esc(roleLabel(person.role||"student"))}</div></div></div><p class="text-muted" style="font-size:11px">${esc(person.course||"")} ${person.year?`· Year ${esc(person.year)}`:""}</p><div class="meta-line"><span>Registration ID</span><b>${esc(person.collegeId||"Not shared")}</b></div><button class="btn btn-ghost btn-small" data-profile="${esc(person.uid)}">View profile ↗</button></article>`;
 }
 async function renderDirectory() {
+  await refreshCurrentProfileFromServer();
   if (!communityVerified()) { $("page-content").innerHTML = pageHeading("CAMPUS COMMUNITY","Student directory","Find people from your verified campus community.") + `<div class="panel">${empty("◎","Membership verification pending","Your profile is complete, but a Warden, Faculty member or University Administrator must confirm your campus membership before you can browse the directory or start chats.")}</div>`; return; }
   peopleCache = await getCampusPeople();
   let pendingHtml = "";
   if (canVerifyStudents()) {
     const pendingQuery = query(collection(db,"profiles"), where("universityKey","==",currentProfile.universityKey), where("membershipStatus","==","pending"), limit(50));
     const pendingSnap = await getDocs(pendingQuery);
-    const pending = pendingSnap.docs.map(item=>({uid:item.id,...item.data()})).filter(person=>person.uid!==currentUser.uid && person.profileComplete===true);
+    const pending = pendingSnap.docs.map(item=>({...item.data(),uid:item.id})).filter(person=>person.uid!==currentUser.uid && person.profileComplete===true);
     pendingHtml = `<div class="panel" style="margin-bottom:14px"><div class="panel-title"><h3>Pending student verification</h3><span class="page-kicker">CAMPUS ACCESS REVIEW</span></div>${pending.length?pending.map(person=>`<div class="application-row"><div class="row-main"><b>${esc(person.name)}</b><small>${esc(person.collegeId||"No registration ID")} · ${esc(person.department||"")} · ${esc(person.course||"")}</small></div><button class="btn btn-primary btn-small" data-verify-student="${esc(person.uid)}">Verify</button></div>`).join(""):empty("✓","No pending students","New student registrations awaiting verification will appear here.")}</div>`;
   }
   $("page-content").innerHTML = pendingHtml + pageHeading("CAMPUS COMMUNITY","Student directory","Find verified students and teaching staff by name, email, phone, registration ID or department. Open a profile to start a campus chat.") +
@@ -479,14 +546,29 @@ async function autoEnrollStudentIntoMatchingChannels(profile) {
   return matches.length;
 }
 
+async function approveCampusMembership(uid) {
+  const ref = doc(db, "profiles", uid);
+  const before = await getDocFromServer(ref);
+  if (!before.exists()) throw new Error("Student profile not found.");
+  const student = before.data();
+  if (student.universityKey !== currentProfile.universityKey) throw new Error("This student belongs to a different campus.");
+  if (student.profileComplete !== true) throw new Error("The student must complete the required profile before approval.");
+  if (student.membershipStatus === "verified") return {alreadyVerified:true, enrolled:0};
+  if (student.membershipStatus !== "pending") throw new Error(`This profile is currently ${student.membershipStatus || "unreviewed"}; only pending profiles can be approved.`);
+  await updateDoc(ref, {membershipStatus:"verified",membershipReviewedBy:currentUser.uid,membershipReviewedAt:serverTimestamp(),updatedAt:serverTimestamp()});
+  const after = await getDocFromServer(ref);
+  if (!after.exists() || after.data().membershipStatus !== "verified") throw new Error("Firebase did not confirm the approval update. Check Firestore rules and try again.");
+  let enrolled = 0;
+  try { enrolled = await autoEnrollStudentIntoMatchingChannels({uid,...after.data()}); }
+  catch (error) { console.warn("Student approved, but automatic channel enrolment needs attention", error); }
+  return {alreadyVerified:false, enrolled};
+}
 async function verifyCampusStudent(uid) {
   if (!canVerifyStudents()) return toast("Only an authorised Warden, Faculty member or University Administrator can approve student membership.");
   if (!window.confirm("Confirm this student’s enrolment using your university records?")) return;
   try {
-    await updateDoc(doc(db,"profiles",uid),{membershipStatus:"verified",membershipReviewedBy:currentUser.uid,membershipReviewedAt:serverTimestamp(),updatedAt:serverTimestamp()});
-    const profileSnap=await getDoc(doc(db,"profiles",uid));
-    if(profileSnap.exists()) await autoEnrollStudentIntoMatchingChannels({uid,...profileSnap.data()});
-    toast("Student campus membership verified. Matching auto-enrol channels have been synced.");
+    const result = await approveCampusMembership(uid);
+    toast(result.alreadyVerified ? "This student is already verified." : `Student approved. ${result.enrolled} matching class/subject channel(s) synchronised.`);
     await renderPage("directory",false);
   }
   catch(error) { toast("Could not verify student: "+friendlyAuthError(error)); }
@@ -527,11 +609,21 @@ async function getMyConversations() {
   // are intentionally not auto-migrated from a broad query because Firestore
   // Security Rules cannot safely prove that query is campus-scoped.
   const q = query(collection(db,"conversations"), where("participants","array-contains",currentUser.uid), where("universityKey","==",currentProfile.universityKey), limit(100));
-  const snap = await getDocs(q);
+  const snap = await getDocsFromServer(q);
   return snap.docs.map(item => ({id:item.id,...item.data()})).sort((a,b)=>(b.lastMessageAt?.seconds||0)-(a.lastMessageAt?.seconds||0));
 }
 async function renderMessages() {
-  if (!communityVerified()) { $("page-content").innerHTML = pageHeading("CAMPUS COMMUNITY","Messages","Secure conversations for verified members of your campus.") + `<div class="panel">${empty("✉","Membership verification pending","Complete your profile, then ask an authorised Warden, Faculty member or University Administrator to approve your campus membership before you can search for students or chat.")}</div>`; return; }
+  await refreshCurrentProfileFromServer();
+  if (!communityVerified()) {
+    $("page-content").innerHTML = pageHeading("CAMPUS COMMUNITY","Messages","Secure conversations for verified members of your campus.") +
+      `<div class="panel">${empty("✉","Membership verification pending",`Your profile is complete, but the latest server profile still reports "${esc(currentProfile.membershipStatus || "pending")}". Ask an authorised Warden, Faculty member or University Administrator to approve this exact profile document.`)}<div class="meta-line"><span>Profile document / UID</span><b>${esc(currentUser.uid)}</b></div><div class="meta-line"><span>Campus key</span><b>${esc(currentProfile.universityKey || "Missing")}</b></div><button class="btn btn-primary btn-small" id="refresh-membership-status">Refresh approval status</button></div>`;
+    $("refresh-membership-status").onclick = async () => {
+      const button = $("refresh-membership-status"); button.disabled = true; button.textContent = "Checking…";
+      try { await refreshCurrentProfileFromServer(); if (communityVerified()) { toast("Campus membership is verified. Messages are now unlocked."); await renderPage("messages", false); } else { toast(`Firebase still reports membership status: ${currentProfile.membershipStatus || "pending"}. Ask staff to approve this exact profile UID.`); button.disabled = false; button.textContent = "Refresh approval status"; } }
+      catch (error) { toast("Could not refresh membership: " + friendlyAuthError(error)); button.disabled = false; button.textContent = "Refresh approval status"; }
+    };
+    return;
+  }
   try {
     conversationCache = await getMyConversations();
   } catch (error) {
@@ -584,19 +676,23 @@ async function startDirectConversation(person) {
   if (person.universityKey !== currentProfile.universityKey) return toast("You can only message students from your current university community.");
   const id = directConversationId(currentUser.uid,person.uid), ref = doc(db,"conversations",id);
   try {
-    const snap = await getDoc(ref);
+    // Use the server for the existence check. A cached "missing" result can
+    // otherwise make a previously-created chat look absent in another tab.
+    const snap = await getDocFromServer(ref);
     if (!snap.exists()) {
       const participants = [currentUser.uid,person.uid].sort();
       await setDoc(ref,{type:"direct",participants,admins:[],groupName:"",university:currentProfile.university,universityKey:currentProfile.universityKey,
         memberNames:{[currentUser.uid]:currentProfile.name,[person.uid]:person.name},createdBy:currentUser.uid,createdAt:serverTimestamp(),updatedAt:serverTimestamp(),lastMessage:"",lastMessageAt:serverTimestamp()});
     }
-    activeConversation = {id,...(await getDoc(ref)).data()};
+    const latest = await getDocFromServer(ref);
+    if (!latest.exists()) throw new Error("The conversation was not created. Check that both accounts are verified on the same campus and that the latest Firestore rules are published.");
+    activeConversation = {id,...latest.data()};
     await renderPage("messages");
   } catch (error) { toast("Could not start conversation: " + friendlyAuthError(error)); }
 }
 async function openConversation(id) {
   try {
-    const snap = await getDoc(doc(db,"conversations",id));
+    const snap = await getDocFromServer(doc(db,"conversations",id));
     if (!snap.exists()) return toast("This conversation is no longer available.");
     const conversation = {id,...snap.data()};
     if (!conversation.participants?.includes(currentUser.uid) || conversation.universityKey !== currentProfile.universityKey) return toast("You no longer have access to this conversation.");
@@ -653,9 +749,16 @@ async function sendMessage(event) {
   const conversation = activeConversation;
   input.disabled = true;
   try {
+    // The message write is the primary operation. Do not report a failed send
+    // merely because the optional conversation preview update is denied.
     await addDoc(collection(db,"conversations",conversation.id,"messages"),{senderUid:currentUser.uid,text:textValue,createdAt:serverTimestamp(),updatedAt:serverTimestamp(),edited:false,deleted:false,readBy:[currentUser.uid]});
-    await updateDoc(doc(db,"conversations",conversation.id),{lastMessage:textValue,lastMessageAt:serverTimestamp(),updatedAt:serverTimestamp()});
     input.value = "";
+    try {
+      await updateDoc(doc(db,"conversations",conversation.id),{lastMessage:textValue,lastMessageAt:serverTimestamp(),updatedAt:serverTimestamp()});
+    } catch (previewError) {
+      console.warn("Message was saved, but the conversation preview could not be updated", previewError);
+      toast("Message sent. The conversation preview could not refresh; check the latest Firestore rules.");
+    }
     if (conversation.type === "direct") {
       const recipient = conversation.participants.find(uid => uid !== currentUser.uid);
       await addNotification(recipient,{title:`New message from ${currentProfile.name}`,body:textValue.slice(0,180),type:"message",fromUid:currentUser.uid,conversationId:conversation.id});
@@ -846,9 +949,9 @@ async function renderWardenConsole(){
 async function renderUniversityAdmin(){
   if(currentProfile.role!=="admin"){ $("page-content").innerHTML=pageHeading("UNIVERSITY OFFICE","Administration","University operations and governance.")+`<div class="panel">${empty("◈","Administrator access required","This area is available only to an account with the admin role.")}</div>`;return; }
   const [profileSnap,channelsSnap,apps]=await Promise.all([getDocs(query(collection(db,"profiles"),where("universityKey","==",currentProfile.universityKey),limit(250))),getDocs(query(collection(db,"channels"),where("universityKey","==",currentProfile.universityKey),limit(150))),getPendingApplications()]);
-  const people=profileSnap.docs.map(d=>({id:d.id,...d.data()})),pending=people.filter(p=>p.membershipStatus==="pending"&&p.profileComplete),bannedSnap=await getDocs(query(collection(db,"userModeration"),where("universityKey","==",currentProfile.universityKey),limit(150))),banned=bannedSnap.docs.map(d=>({id:d.id,...d.data()})).filter(x=>x.status==="banned"&&(x.banType==="permanent"||!x.expiresAt||x.expiresAt.toDate?.()>new Date()));
+  const people=profileSnap.docs.map(d=>({...d.data(),id:d.id,uid:d.id})),pending=people.filter(p=>p.membershipStatus==="pending"&&p.profileComplete),bannedSnap=await getDocs(query(collection(db,"userModeration"),where("universityKey","==",currentProfile.universityKey),limit(150))),banned=bannedSnap.docs.map(d=>({id:d.id,...d.data()})).filter(x=>x.status==="banned"&&(x.banType==="permanent"||!x.expiresAt||x.expiresAt.toDate?.()>new Date()));
   $("page-content").innerHTML=pageHeading("UNIVERSITY GOVERNANCE","Administration","Central office controls for identity verification, academic calendar, communities, policies and platform safety.",'<button class="btn btn-primary btn-small" id="admin-calendar">＋ Publish holiday / timetable</button>')+`<div class="grid stats-grid"><div class="stat-card"><div class="stat-label">Campus profiles</div><div class="stat-value">${people.length}</div><div class="stat-foot">Current campus registry view</div></div><div class="stat-card"><div class="stat-label">Pending verification</div><div class="stat-value">${pending.length}</div><div class="stat-foot">Student access approvals</div></div><div class="stat-card"><div class="stat-label">Chat groups</div><div class="stat-value">${channelsSnap.size}</div><div class="stat-foot">Class, subject, hostel and club channels</div></div><div class="stat-card"><div class="stat-label">Restricted accounts</div><div class="stat-value">${banned.length}</div><div class="stat-foot">Temporary or permanent restrictions</div></div></div><div class="panel" style="margin-top:14px"><div class="panel-title"><h3>Student identity & chat access approvals</h3><span class="page-kicker">WARDEN · FACULTY · ADMIN CAN REVIEW</span></div>${pending.map(p=>`<div class="application-row"><div class="row-icon">◎</div><div class="row-main"><b>${esc(p.name||"Student")}</b><small>${esc(p.email||"")} · ${esc(p.department||"Department pending")} · ${esc(p.collegeId||"ID pending")}</small></div><button class="btn btn-primary btn-small" data-verify-user="${esc(p.uid)}">Approve chat</button><button class="btn btn-ghost btn-small" data-reject-user="${esc(p.uid)}">Reject</button></div>`).join("")||empty("✓","No pending profiles","New completed student profiles will appear here for staff approval.")}</div><div class="grid dashboard-grid"><section class="panel"><div class="panel-title"><h3>Campus operations</h3></div><div class="quick-grid"><button class="quick-action" data-admin-go="academics"><span>▦</span><b>Timetable & holidays</b><small>Publish the university calendar</small></button><button class="quick-action" data-admin-go="events"><span>✳</span><b>Clubs & events</b><small>Manage campus communities</small></button><button class="quick-action" data-admin-go="notices"><span>◷</span><b>Official notice board</b><small>Publish university notices</small></button><button class="quick-action" data-admin-go="channels"><span>▣</span><b>Group governance</b><small>Inspect and remove channels</small></button></div></section><section class="panel"><div class="panel-title"><h3>Account moderation</h3></div>${people.filter(p=>p.role!=="admin"&&p.uid!==currentUser.uid).slice(0,12).map(p=>`<div class="application-row"><div class="row-main"><b>${esc(p.name||"Campus member")}</b><small>${esc(p.email||"")} · ${esc(p.membershipStatus||"pending")}</small></div><button class="btn btn-ghost btn-small" data-ban-user="${esc(p.uid)}">Restrict</button></div>`).join("")||`<p class="text-muted">No other profiles found.</p>`}</section></div><section class="panel" style="margin-top:14px"><div class="panel-title"><h3>Restricted accounts</h3></div>${banned.map(x=>`<div class="application-row"><div class="row-main"><b>${esc(x.userName||x.id)}</b><small>${esc(x.banType||"temporary")} · ${esc(x.reason||"No reason supplied")}</small></div><button class="btn btn-ghost btn-small" data-unban-user="${esc(x.id)}">Restore access</button></div>`).join("")||`<p class="text-muted">No accounts currently restricted.</p>`}</section>`;
-  document.querySelectorAll("[data-verify-user]").forEach(b=>b.onclick=async()=>{try{const uid=b.dataset.verifyUser;await updateDoc(doc(db,"profiles",uid),{membershipStatus:"verified",membershipReviewedBy:currentUser.uid,membershipReviewedAt:serverTimestamp(),updatedAt:serverTimestamp()});const profileSnap=await getDoc(doc(db,"profiles",uid));if(profileSnap.exists())await autoEnrollStudentIntoMatchingChannels({uid,...profileSnap.data()});toast("Student approved. Campus messaging and matching class/subject channels are enabled.");await renderPage("university",false);}catch(err){toast("Approval failed: "+friendlyAuthError(err));}});
+  document.querySelectorAll("[data-verify-user]").forEach(b=>b.onclick=async()=>{try{const result=await approveCampusMembership(b.dataset.verifyUser);toast(result.alreadyVerified?"This student is already verified.":`Student approved. ${result.enrolled} matching class/subject channel(s) synchronised.`);await renderPage("university",false);}catch(err){toast("Approval failed: "+friendlyAuthError(err));}});
   document.querySelectorAll("[data-reject-user]").forEach(b=>b.onclick=async()=>{try{await updateDoc(doc(db,"profiles",b.dataset.rejectUser),{membershipStatus:"rejected",membershipReviewedBy:currentUser.uid,membershipReviewedAt:serverTimestamp(),updatedAt:serverTimestamp()});toast("Student profile rejected.");await renderPage("university",false);}catch(err){toast("Rejection failed: "+friendlyAuthError(err));}});
   document.querySelectorAll("[data-ban-user]").forEach(b=>b.onclick=async()=>{const uid=b.dataset.banUser;const person=people.find(p=>p.uid===uid);openModal(`<span class="eyebrow">ACCOUNT MODERATION</span><h2>Restrict campus account</h2><p>This blocks access to the NeonVerse workspace. It does not delete the Firebase Authentication account.</p><form id="ban-form"><div class="field"><label>Restriction type</label><select name="banType"><option value="temporary">Temporary</option><option value="permanent">Permanent</option></select></div><div class="field"><label>Duration (hours, temporary only)</label><input name="hours" type="number" min="1" max="8760" value="24"></div><div class="field"><label>Reason</label><textarea name="reason" rows="3" required></textarea></div><button class="btn btn-primary btn-block">Apply restriction</button></form>`);$("ban-form").onsubmit=async e=>{e.preventDefault();const d=Object.fromEntries(new FormData(e.currentTarget));const expiry=d.banType==="temporary"?new Date(Date.now()+Number(d.hours)*3600000):null;try{await setDoc(doc(db,"userModeration",uid),{userUid:uid,userName:person?.name||"Campus member",universityKey:currentProfile.universityKey,status:"banned",banType:d.banType,expiresAt:expiry,reason:d.reason,updatedBy:currentUser.uid,updatedAt:serverTimestamp()});closeModal();toast("Account restriction applied.");await renderPage("university",false);}catch(err){toast("Could not apply restriction: "+friendlyAuthError(err));}};});
   document.querySelectorAll("[data-unban-user]").forEach(b=>b.onclick=async()=>{try{await setDoc(doc(db,"userModeration",b.dataset.unbanUser),{status:"active",updatedBy:currentUser.uid,updatedAt:serverTimestamp()},{merge:true});toast("Account restored.");await renderPage("university",false);}catch(err){toast("Could not restore account: "+friendlyAuthError(err));}});
@@ -857,6 +960,7 @@ async function renderUniversityAdmin(){
 }
 
 async function renderChannels(openId=null){
+  await refreshCurrentProfileFromServer();
   if(!communityVerified()){ $("page-content").innerHTML=pageHeading("CAMPUS COMMUNITIES","Class & subject groups","Your enrolled academic and campus channels.")+`<div class="panel">${empty("▣","Verification required","A staff member must verify your campus profile before chat channels are available.")}</div>`;return; }
   let channelDocs=[], featuredChannels=[];
   if(isStaff()){
@@ -959,6 +1063,7 @@ async function globalSearch() {
 }
 async function doSignout() {
   if(unsubscribeMessages)unsubscribeMessages();if(unsubscribeNotifications)unsubscribeNotifications();
+  stopSessionWatchers();
   await signOut(auth);currentUser=null;currentProfile=null;activeConversation=null;conversationCache=[];peopleCache=[];pageHistory=[];showLanding();toast("You have signed out.");
 }
 
@@ -979,4 +1084,4 @@ $("tour-next").onclick=()=>{if(tourIndex<tour.length-1){tourIndex++;showTour();}
 $("tour-skip").onclick=()=>{$("tour-overlay").classList.add("hidden");localStorage.setItem("neonverse-tour-done","1");};
 document.addEventListener("keydown",event=>{if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==="k"){event.preventDefault();if(currentUser)globalSearch();}if(event.key==="Escape"){if(!lockedModal)closeModal();$("tour-overlay").classList.add("hidden");closeSidebar();}});
 loadTheme();
-if(firebaseReady){onAuthStateChanged(auth,async user=>{if(user&&!currentUser){await finishLogin(user);}else if(!user&&currentUser){currentUser=null;currentProfile=null;showLanding();}});}
+if(firebaseReady){onAuthStateChanged(auth,async user=>{if(user&&!currentUser){await finishLogin(user);}else if(!user&&currentUser){stopSessionWatchers();currentUser=null;currentProfile=null;showLanding();}});}

@@ -223,7 +223,57 @@ This build supports teacher discovery and contact through verified campus profil
 
 For official integration, LPU's authorised IT team would need to provide one or more approved interfaces such as SSO/OIDC/SAML, a documented REST API, a sanctioned SIS/LMS integration, or an authorised data export. Put privileged credentials and sync jobs on a trusted backend—not in `script.js` or `firebase-config.js`. Confirm data-protection, consent, retention and access rules before importing student records.
 
-## 9. Pilot limitations and production checklist
+## 9. Chat approval and messaging repair (this package)
+
+This package includes a targeted repair for reports where students continued seeing “Membership verification pending” after staff approval, or where direct messages failed to open/send. The changes include:
+
+- Refresh the signed-in user's profile and staff role directly from Firestore's server before rendering the directory or Messages page.
+- Listen for live changes to the signed-in user's `profiles/{uid}` and `roles/{uid}` documents. The first server snapshot is also compared with the sign-in state, so a newer approval is not ignored.
+- The pending screen shows the exact Firebase Auth UID/profile document ID and campus key that staff need to approve.
+- Staff approval checks the exact target profile, performs the approved status update, then reads the document back from the server to confirm `membershipStatus` is `verified`.
+- Direct-conversation existence checks and the conversation list use server reads, reducing stale-cache behaviour.
+- A message save is treated separately from the optional conversation-preview update, so a preview permission issue cannot falsely report that the message itself was not sent.
+- Profile list rows use each Firestore document ID as the canonical UID when routing approval actions.
+
+### Required deployment steps for the repair
+
+1. Keep a backup of the currently deployed project.
+2. Copy the new `script.js` and `firestore.rules` from this ZIP into the Vercel project. Keep your existing, working Firebase Web configuration in `firebase-config.js`; the copy in a downloadable source package may contain placeholders. Do not paste Firebase service-account/private credentials into the browser project.
+3. Publish the complete `firestore.rules` from this ZIP in Firebase Console → Firestore Database → Rules, then click **Publish**. Do not combine it with old rules by pasting fragments.
+4. Deploy the included composite indexes. From the project folder run:
+
+   ```bash
+   firebase login
+   firebase use YOUR_FIREBASE_PROJECT_ID
+   firebase deploy --only firestore:rules,firestore:indexes
+   ```
+
+   You can also create an index from the exact Firebase error link if Firebase reports that a query needs an index. Wait until the index status is **Enabled**.
+5. Commit and push the updated files to GitHub so Vercel deploys the new `script.js`. Confirm the Vercel deployment is Ready.
+6. In the browser, hard-refresh the site, sign out, and sign in again. On the student's Messages page, press **Refresh approval status** if it still displays the pending panel.
+
+### Verify a student's exact record
+
+For the student who cannot chat, open Firebase Console → Firestore Database → Data → `profiles` → the student's Firebase Authentication UID. The document ID must be the same UID as Firebase Authentication. Confirm all of the following:
+
+| Field | Required value for the LPU pilot |
+|---|---|
+| `uid` | Same as the Firebase Authentication UID and document ID |
+| `profileComplete` | `true` |
+| `membershipStatus` | `verified` (exact lowercase spelling) |
+| `universityKey` | `lovely-professional-university` |
+
+Both people in a direct conversation must have completed profiles, `membershipStatus: verified`, and the exact same `universityKey`. The authorising staff member must have a `roles/{staffUid}` document with `role` set to `admin`, `warden`, or `faculty`, and their own completed profile must use the same campus key. The app will not unlock chat when an account's profile document remains `pending` or has a different campus key.
+
+### What to check if it still fails
+
+- If the pending screen says `pending` after **Refresh approval status**, the server still sees that exact profile document as pending. Check the document ID/UID and status in Firestore. A success toast alone is not a substitute for checking the student's exact record.
+- If the status is `verified` but the directory is empty, confirm the other person's profile is also verified and has the same campus key.
+- If the conversation list shows **Missing or insufficient permissions**, confirm the complete new rules are published and that the active Firebase project matches `firebase-config.js`.
+- If Firebase displays a missing-index error, create the index from Firebase's generated link and wait for it to become Enabled. The included indexes already contain the direct-conversation composite index (`participants` array + `universityKey`).
+- Existing legacy conversations without `universityKey` are excluded from the campus-scoped conversation list. New conversations created after deployment use the campus key.
+
+## 10. Pilot limitations and production checklist
 
 - **No live Firebase verification was performed while packaging this ZIP.** The JavaScript syntax and JSON index file are checked locally, but you must publish and test the Firestore Rules in your Firebase project. A Firebase Rules compiler/emulator and live end-to-end tests were not available in this packaging run.
 - This is a frontend + Firebase client implementation. Use the Firebase Emulator Suite and test with separate Student/Warden/Faculty/Admin accounts before real student data is added.
@@ -235,7 +285,7 @@ For official integration, LPU's authorised IT team would need to provide one or 
 - No file attachments, Firebase Storage, video/audio, real-time push notifications, payment processing, biometric attendance, ERP sync or emergency dispatch are included.
 - Add institution-approved retention, moderation, audit logs, accessibility review, backups and an incident-response process before production use.
 
-## 10. Local development
+## 11. Local development
 
 You can serve the static files with any local HTTP server. For example, from the folder containing `index.html`:
 
