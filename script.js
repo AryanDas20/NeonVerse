@@ -366,7 +366,7 @@ function configureNavigation() {
   if (currentProfile?.role === "faculty") addGroup("FACULTY DESK", [["faculty","▤","Faculty workspace"]]);
   if (currentProfile?.role === "warden") addGroup("WARDEN DESK", [["warden","⌂","Warden workspace"]]);
   if (currentProfile?.role === "admin") addGroup("UNIVERSITY OFFICE", [["university","◈","University administration"]]);
-  if (["warden", "faculty", "admin"].includes(currentProfile?.role)) addGroup("AI WORK", [["ai-work","✦","AI Work"]]);
+  addGroup("AI WORK", [["ai-work","✦","AI Work"]]);
 }
 async function loadWorkspace() {
   if (!currentUser || !db) return;
@@ -414,161 +414,90 @@ async function getPendingApplications() {
   [...currentSnap.docs,...legacySnap.docs].forEach(item=>merged.set(item.id,{id:item.id,...item.data()}));
   return [...merged.values()];
 }
-// AI Work is a controlled task planner. Agent37 proposes only allow-listed
-// leave approvals; NeonVerse re-reads each record and Firestore Rules enforce
-// staff/campus permissions when the staff member confirms execution.
-function aiWorkLeaveDays(fromDate, toDate) {
-  const parse = value => {
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(value || ""))) return null;
-    const [year, month, day] = String(value).split("-").map(Number);
-    const date = new Date(Date.UTC(year, month - 1, day));
-    return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day ? date : null;
-  };
-  const start = parse(fromDate), end = parse(toDate);
-  if (!start || !end || end < start) return null;
-  return Math.floor((end.getTime() - start.getTime()) / 86400000) + 1;
-}
-function aiWorkEligibleLeave(app) {
-  const days = aiWorkLeaveDays(app?.fromDate, app?.toDate);
-  const sameCampus = app?.universityKey
-    ? app.universityKey === currentProfile?.universityKey
-    : Boolean(app?.university && app.university === currentProfile?.university);
-  return Boolean(app && app.status === "pending" && /leave/i.test(String(app.type || "")) &&
-    Number.isInteger(days) && days >= 1 && days <= 3 && sameCampus);
-}
+// Agent37 AI Work: autonomous execution of explicitly requested, allow-listed actions.
+// The model never receives credentials. Firestore Rules remain the final authority.
+let aiWorkPlan = null, aiWorkBusy = false;
 function renderAiWorkPlan(plan) {
   const actions = Array.isArray(plan?.actions) ? plan.actions : [];
   const skipped = Array.isArray(plan?.skipped) ? plan.skipped : [];
-  const actionRows = actions.map(action => `<tr><td><b>${esc(action.studentName || "Student")}</b><div class="text-muted">${esc(action.title || "Leave application")}</div></td><td>${esc(action.fromDate)} → ${esc(action.toDate)}</td><td><span class="status approved">${Number(action.durationDays)} day${Number(action.durationDays) === 1 ? "" : "s"}</span></td><td><span class="status pending">Ready for review</span></td></tr>`).join("");
-  const skippedRows = skipped.map(item => `<div class="ai-work-skipped-row"><span>↳ ${esc(item.applicationId || "Application")}</span><small>${esc(item.reason)}</small></div>`).join("");
-  const result = $("ai-work-result");
-  if (!result) return;
+  const rows = actions.map(a => `<tr><td><b>${esc(a.title || a.type || a.action)}</b></td><td>${esc(a.action.replaceAll("_", " "))}</td><td>${esc(a.studentName || "Your account")}</td></tr>`).join("");
+  const skippedRows = skipped.map(x => `<div class="ai-work-skipped-row"><span>${esc(x.applicationId || "Item")}</span><small>${esc(x.reason || "Not actioned")}</small></div>`).join("");
+  const result = $("ai-work-result"); if (!result) return;
   result.classList.remove("hidden");
-  result.innerHTML = `<div class="ai-work-result-head"><div><div class="page-kicker">AGENT37 TASK PLAN</div><h3>${esc(plan?.summary || "Task plan prepared")}</h3><p>${esc(plan?.note || "No website records have been changed yet.")}</p></div><div class="ai-work-count"><strong>${actions.length}</strong><small>proposed approvals</small></div></div>
-    ${actions.length ? `<div class="table-wrap"><table class="data-table"><thead><tr><th>STUDENT / REQUEST</th><th>LEAVE DATES</th><th>DURATION</th><th>STATUS</th></tr></thead><tbody>${actionRows}</tbody></table></div>` : `<div class="ai-work-no-actions">No leave approvals are ready to execute. The instruction may be read-only, or no pending leave request met the three-day rule.</div>`}
-    ${skippedRows ? `<details class="ai-work-skipped"><summary>See ${skipped.length} item(s) the agent skipped</summary>${skippedRows}</details>` : ""}
-    <div class="ai-work-result-actions"><button class="btn btn-ghost btn-small" id="ai-work-discard">Discard plan</button>${actions.length ? `<button class="btn btn-primary" id="ai-work-execute">Confirm & execute ${actions.length} approval${actions.length === 1 ? "" : "s"}</button>` : ""}</div>`;
-  $("ai-work-discard")?.addEventListener("click", () => { aiWorkPlan = null; result.classList.add("hidden"); result.replaceChildren(); });
-  $("ai-work-execute")?.addEventListener("click", executeAiWorkPlan);
+  result.innerHTML = `<div class="ai-work-result-head"><div><div class="page-kicker">AGENT37 EXECUTION REPORT</div><h3>${esc(plan.summary || "Task processed")}</h3><p>${esc(plan.note || "Execution finished. See the activity summary below.")}</p></div><div class="ai-work-count"><strong>${Number(plan.completedCount || 0)}</strong><small>completed</small></div></div>${rows ? `<div class="table-wrap"><table class="data-table"><thead><tr><th>TASK</th><th>ACTION</th><th>ACCOUNT</th></tr></thead><tbody>${rows}</tbody></table></div>` : `<div class="ai-work-no-actions">No supported action was requested or the instruction needs more detail. Nothing was changed.</div>`}${skippedRows ? `<details class="ai-work-skipped"><summary>See skipped items</summary>${skippedRows}</details>` : ""}`;
 }
 async function renderAiWork() {
-  const permitted = ["warden", "faculty", "admin"].includes(currentProfile?.role);
-  if (!permitted) {
-    aiWorkPlan = null;
-    $("page-content").innerHTML = pageHeading("STAFF AUTOMATION", "AI Work", "This workspace is available only to authorised Warden, Faculty and Administrator accounts.") + `<div class="panel">${empty("✦", "Staff access required", "Your account does not have permission to use AI Work.")}</div>`;
-    return;
-  }
   aiWorkPlan = null;
-  $("page-content").innerHTML = pageHeading("AGENT37 · STAFF AUTOMATION", "AI Work", "Describe an administrative task in plain language. Agent37 prepares a plan using pending records from your campus.") +
-    `<div class="ai-work-layout"><section class="panel ai-work-compose-panel"><div class="ai-work-intro"><div class="ai-work-symbol">✦</div><div><h2>What would you like me to do?</h2><p>Write naturally, as you would instruct a staff assistant. NeonVerse checks permissions and policy limits before any action is applied.</p></div></div>
-      <div class="ai-work-chips"><button type="button" class="ai-work-chip" data-ai-example="Approve all pending leave requests whose date span is no more than 3 calendar days. Leave longer requests for manual review.">Review leaves up to 3 days</button><button type="button" class="ai-work-chip" data-ai-example="Summarise the pending applications on my campus. Do not change any records.">Summarise pending applications</button></div>
-      <form id="ai-work-form"><label for="ai-work-input">Your instruction</label><textarea id="ai-work-input" rows="5" maxlength="1600" placeholder="Example: Approve all pending hostel leave applications that are not more than 3 days. Leave longer requests for manual review." required></textarea><div class="ai-work-form-foot"><small>Up to 1,600 characters · Only your campus's pending applications are considered.</small><button class="btn btn-primary" id="ai-work-submit" type="submit">✦ Ask Agent37</button></div></form>
-      <div id="ai-work-status" class="ai-work-status" aria-live="polite">Ready · Staff access verified by NeonVerse</div>
-    </section>
-    <aside class="panel ai-work-policy-panel"><div class="page-kicker">CURRENT AUTOMATION POLICY</div><h3>Safe actions only</h3><div class="ai-work-policy-item"><span>✓</span><div><b>Leave approvals</b><small>Only pending leave requests of 1–3 calendar days can be proposed.</small></div></div><div class="ai-work-policy-item"><span>✓</span><div><b>Campus boundaries</b><small>Only records from your verified campus are sent to the agent.</small></div></div><div class="ai-work-policy-item"><span>✓</span><div><b>Staff confirmation</b><small>You review the proposed actions and confirm before NeonVerse updates records.</small></div></div><div class="ai-work-policy-item"><span>✓</span><div><b>Audit trail</b><small>Each approval records the staff UID, date and review note in application history.</small></div></div><p class="ai-work-policy-note">This first release does not reject requests, change roles, publish notices, or edit other university records. A request longer than 3 calendar days is never auto-approved.</p></aside></div><section id="ai-work-result" class="panel ai-work-result hidden" aria-live="polite"></section>`;
+  const staff = ["warden", "faculty", "admin"].includes(currentProfile?.role);
+  $("page-content").innerHTML = pageHeading("AGENT37 · AUTONOMOUS ASSISTANT", "AI Work", staff ? "Give your campus assistant a task. Supported actions execute automatically within your staff permissions." : "Ask NeonVerse AI to prepare and submit requests for your own student account.") +
+    `<div class="ai-work-layout"><section class="panel ai-work-compose-panel"><div class="ai-work-intro"><div class="ai-work-symbol">✦</div><div><h2>What should I do?</h2><p>${staff ? "Write the task naturally. The agent will act on matching pending campus applications." : "Ask to submit a leave request, maintenance report or other campus service application."}</p></div></div>
+      <div class="ai-work-chips">${staff ? `<button type="button" class="ai-work-chip" data-ai-example="Approve all pending leave applications for my campus.">Approve pending leave</button><button type="button" class="ai-work-chip" data-ai-example="Reject duplicate pending applications and explain the reason in the review note.">Reject duplicates</button><button type="button" class="ai-work-chip" data-ai-example="Summarise all pending applications without changing anything.">Summarise queue</button>` : `<button type="button" class="ai-work-chip" data-ai-example="Submit a hostel leave application for tomorrow because I need to visit home.">Apply for leave</button><button type="button" class="ai-work-chip" data-ai-example="Submit a maintenance request: the fan in my room is not working.">Report maintenance</button>`}</div>
+      <form id="ai-work-form"><label for="ai-work-input">Your instruction</label><textarea id="ai-work-input" rows="5" maxlength="1600" placeholder="${staff ? "Example: Approve all pending leave applications for my campus." : "Example: Apply for hostel leave this Friday to visit home."}" required></textarea><div class="ai-work-form-foot"><small>Agent actions are limited by your signed-in account and Firestore permissions. Each action is recorded.</small><button class="btn btn-primary" id="ai-work-submit" type="submit">✦ Run with Agent37</button></div></form><div id="ai-work-status" class="ai-work-status" aria-live="polite">Ready · ${staff ? "Staff" : "Student"} access verified</div></section>
+    <aside class="panel ai-work-policy-panel"><div class="page-kicker">AUTOMATION & SAFEGUARDS</div><h3>What happens automatically</h3><div class="ai-work-policy-item"><span>✓</span><div><b>Instruction-led</b><small>No hard-coded three-day leave limit. The staff instruction and campus procedures guide the decision.</small></div></div><div class="ai-work-policy-item"><span>✓</span><div><b>Role and campus permissions</b><small>Staff can act only on records their role may review. Students can create requests only for themselves.</small></div></div><div class="ai-work-policy-item"><span>✓</span><div><b>Automatic execution</b><small>Supported actions run immediately after validation; no second confirmation screen.</small></div></div><div class="ai-work-policy-item"><span>✓</span><div><b>Audit and notifications</b><small>Application decisions record reviewer, timestamp and note. Students are notified after decisions.</small></div></div><p class="ai-work-policy-note">AI cannot bypass account permissions, campus isolation, consent, or Firestore security rules. Unsupported actions are reported rather than falsely marked complete.</p></aside></div><section id="ai-work-result" class="panel ai-work-result hidden" aria-live="polite"></section>`;
   $("ai-work-form").addEventListener("submit", generateAiWorkPlan);
-  document.querySelectorAll("[data-ai-example]").forEach(button => button.addEventListener("click", () => {
-    $("ai-work-input").value = button.dataset.aiExample || "";
-    $("ai-work-input").focus();
-  }));
+  document.querySelectorAll("[data-ai-example]").forEach(b => b.addEventListener("click", () => { $("ai-work-input").value = b.dataset.aiExample || ""; $("ai-work-input").focus(); }));
 }
 async function generateAiWorkPlan(event) {
-  event?.preventDefault?.();
-  if (aiWorkBusy) return;
-  if (!["warden", "faculty", "admin"].includes(currentProfile?.role)) return toast("AI Work is for authorised staff only.");
+  event?.preventDefault?.(); if (aiWorkBusy) return;
+  const staff = ["warden", "faculty", "admin"].includes(currentProfile?.role);
   const instruction = String($("ai-work-input")?.value || "").trim();
   if (!instruction) return toast("Write an instruction first.");
   if (instruction.length > 1600) return toast("Please keep the instruction under 1,600 characters.");
   const submit = $("ai-work-submit"), status = $("ai-work-status"), resultBox = $("ai-work-result");
-  aiWorkBusy = true; aiWorkPlan = null;
-  if (submit) { submit.disabled = true; submit.textContent = "Agent37 is working…"; }
-  if (status) status.textContent = "Loading pending applications from your campus…";
+  aiWorkBusy = true; if (submit) { submit.disabled = true; submit.textContent = "Agent37 is working…"; }
+  if (status) status.textContent = staff ? "Loading your campus application queue…" : "Preparing your student request…";
   if (resultBox) { resultBox.classList.add("hidden"); resultBox.replaceChildren(); }
   try {
     await refreshCurrentProfileFromServer();
-    if (!["warden", "faculty", "admin"].includes(currentProfile?.role)) throw new Error("Your staff role is no longer authorised to use AI Work.");
-    const pending = await getPendingApplications();
-    const scoped = pending.filter(app => app.status === "pending" && (app.universityKey
-      ? app.universityKey === currentProfile.universityKey
-      : app.university === currentProfile.university)).slice(0, 100);
-    if (!scoped.length) throw new Error("There are no pending campus applications to review right now.");
-    const applications = scoped.map(app => ({
-      id: app.id, title: app.title || "", type: app.type || "", studentName: app.studentName || "Student",
-      status: app.status || "", fromDate: app.fromDate || "", toDate: app.toDate || "",
-      fromTime: app.fromTime || "", toTime: app.toTime || "", universityKey: app.universityKey || "", university: app.university || ""
-    }));
-    if (status) status.textContent = `Sending ${applications.length} compact application record(s) to Agent37…`;
-    const idToken = await currentUser.getIdToken();
-    const response = await fetch("/api/agent37-work", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${idToken}` },
-      body: JSON.stringify({ instruction, applications })
-    });
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(payload.error || "Agent37 could not prepare a plan. Please try again.");
-    aiWorkPlan = { ...payload, instruction };
-    if (status) status.textContent = `Plan ready · ${payload.scannedCount || applications.length} campus applications scanned · Nothing changed yet`;
-    renderAiWorkPlan(aiWorkPlan);
-  } catch (error) {
-    if (status) status.textContent = "Could not prepare the task plan.";
-    if (resultBox) {
-      resultBox.classList.remove("hidden");
-      resultBox.innerHTML = `<div class="ai-work-error"><b>AI Work could not complete this request</b><p>${esc(error?.message || "Please try again.")}</p></div>`;
+    const stillStaff = ["warden", "faculty", "admin"].includes(currentProfile?.role);
+    if (staff !== stillStaff) throw new Error("Your account role changed. Refresh and try again.");
+    let applications = [];
+    if (staff) {
+      const pending = await getPendingApplications();
+      applications = pending.filter(a => a.status === "pending" && (a.universityKey ? a.universityKey === currentProfile.universityKey : a.university === currentProfile.university)).slice(0, 100).map(a => ({id:a.id,title:a.title||"",type:a.type||"",studentName:a.studentName||"Student",status:a.status||"",fromDate:a.fromDate||"",toDate:a.toDate||"",fromTime:a.fromTime||"",toTime:a.toTime||"",universityKey:a.universityKey||"",university:a.university||""}));
     }
-  } finally {
-    aiWorkBusy = false;
-    if (submit) { submit.disabled = false; submit.textContent = "✦ Ask Agent37"; }
-  }
+    const idToken = await currentUser.getIdToken();
+    const response = await fetch("/api/agent37-work", {method:"POST",headers:{"Content-Type":"application/json","Authorization":`Bearer ${idToken}`},body:JSON.stringify({instruction,applications})});
+    const payload = await response.json().catch(()=>({})); if (!response.ok) throw new Error(payload.error || "Agent37 could not process this instruction.");
+    aiWorkPlan = {...payload,instruction};
+    if (status) status.textContent = "Agent37 completed its reasoning. Executing authorised actions…";
+    const completed = await executeAiWorkPlan();
+    const report = {...aiWorkPlan,completedCount:completed,note:`Finished automatically · ${completed} action(s) completed. Any unsupported or failed action is listed below.`};
+    renderAiWorkPlan(report); if (status) status.textContent = `Completed · ${completed} action(s) executed`;
+  } catch (error) {
+    if (status) status.textContent = "Could not complete this task.";
+    if (resultBox) { resultBox.classList.remove("hidden"); resultBox.innerHTML = `<div class="ai-work-error"><b>AI Work could not complete this request</b><p>${esc(error?.message || "Please try again.")}</p></div>`; }
+  } finally { aiWorkBusy = false; if (submit) { submit.disabled = false; submit.textContent = "✦ Run with Agent37"; } }
 }
 async function executeAiWorkPlan() {
-  if (!aiWorkPlan || aiWorkBusy) return;
-  if (!["warden", "faculty", "admin"].includes(currentProfile?.role)) return toast("Your staff permission has changed. The plan cannot be executed.");
-  const actions = Array.isArray(aiWorkPlan.actions) ? aiWorkPlan.actions.slice(0, 30) : [];
-  if (!actions.length) return toast("There are no supported actions to execute.");
-  const confirmed = confirm(`You are about to approve ${actions.length} pending leave application(s) from your campus. NeonVerse will re-check each request and will only approve leave of 1–3 calendar days. Continue?`);
-  if (!confirmed) return;
-  aiWorkBusy = true;
-  const button = $("ai-work-execute"), status = $("ai-work-status");
-  if (button) { button.disabled = true; button.textContent = "Executing…"; }
-  if (status) status.textContent = "Re-checking each application and applying confirmed actions…";
-  let approved = 0, skipped = 0;
+  const actions = Array.isArray(aiWorkPlan?.actions) ? aiWorkPlan.actions.slice(0,30) : [];
+  const staff = ["warden", "faculty", "admin"].includes(currentProfile?.role);
+  let completed = 0; const skipped = [...(aiWorkPlan?.skipped || [])];
   for (const action of actions) {
     try {
-      const id = String(action.applicationId || "");
-      if (!id || !/^[A-Za-z0-9_-]{1,100}$/.test(id)) { skipped++; continue; }
-      const ref = doc(db, "applications", id);
-      const snap = await getDoc(ref);
-      if (!snap.exists()) { skipped++; continue; }
-      const app = { id: snap.id, ...snap.data() };
-      if (!aiWorkEligibleLeave(app) || !app.studentUid || !["warden", "faculty", "admin"].includes(currentProfile?.role)) { skipped++; continue; }
-      const days = aiWorkLeaveDays(app.fromDate, app.toDate);
-      const comment = "Approved by authorised staff through AI Work. Leave duration: " + days + " calendar day(s), within the 3-day automation limit.";
-      await updateDoc(ref, {
-        status: "approved", reviewComment: comment, reviewedBy: currentUser.uid,
-        updatedAt: serverTimestamp(),
-        history: [...(Array.isArray(app.history) ? app.history : []), { status: "approved", by: currentUser.uid, at: new Date().toISOString(), comment }]
-      });
-      approved++;
-      try {
-        await addNotification(app.studentUid, {
-          title: "Application approved",
-          body: `${app.title || app.type || "Leave application"}: your leave request was approved by campus staff through AI Work.`,
-          type: "application", fromUid: currentUser.uid
-        });
-      } catch (notificationError) {
-        console.warn("AI Work approval saved but the student notification could not be sent:", notificationError?.code || notificationError?.message);
+      if (action.action === "submit_application" && !staff) {
+        const type = String(action.type || "Other").slice(0,80), title = String(action.title || type).slice(0,140), details = String(action.details || "").slice(0,4000);
+        if (!title || !details) throw new Error("Application title or details missing.");
+        await addDoc(collection(db,"applications"),{type,title,details,fromDate:String(action.fromDate||""),toDate:String(action.toDate||""),studentUid:currentUser.uid,studentName:currentProfile.name,university:currentProfile.university,universityKey:currentProfile.universityKey,status:"pending",createdAt:serverTimestamp(),updatedAt:serverTimestamp(),history:[{status:"pending",by:currentUser.uid,at:new Date().toISOString(),comment:"Submitted by the student's AI Work assistant."}]});
+        completed++; continue;
       }
-    } catch (error) {
-      console.warn("AI Work skipped an application that could not be updated:", error?.code || error?.message);
-      skipped++;
-    }
+      if (["approve_application","reject_application"].includes(action.action) && staff) {
+        const id = String(action.applicationId||""); if (!/^[A-Za-z0-9_-]{1,100}$/.test(id)) throw new Error("Invalid application reference.");
+        const ref = doc(db,"applications",id), snap = await getDoc(ref); if (!snap.exists()) throw new Error("Application no longer exists.");
+        const app = {id:snap.id,...snap.data()};
+        const sameCampus = app.universityKey ? app.universityKey === currentProfile.universityKey : app.university === currentProfile.university;
+        if (app.status !== "pending" || !sameCampus || !app.studentUid) throw new Error("Application is no longer pending or is outside your campus.");
+        const status = action.action === "approve_application" ? "approved" : "rejected";
+        const comment = String(action.comment || `Automatically ${status} by AI Work under staff instruction.`).slice(0,400);
+        await updateDoc(ref,{status,reviewComment:comment,reviewedBy:currentUser.uid,updatedAt:serverTimestamp(),history:[...(Array.isArray(app.history)?app.history:[]),{status,by:currentUser.uid,at:new Date().toISOString(),comment}]});
+        try { await addNotification(app.studentUid,{title:`Application ${status}`,body:`${app.title||app.type||"Your application"}: ${comment}`,type:"application",fromUid:currentUser.uid}); } catch (e) { console.warn("Application saved; notification failed",e); }
+        completed++; continue;
+      }
+      skipped.push({applicationId:action.applicationId||action.title||"Action",reason:"This action is not supported for your account or in this release."});
+    } catch (error) { skipped.push({applicationId:action.applicationId||action.title||"Action",reason:error?.message||"Execution failed"}); }
   }
-  aiWorkBusy = false;
-  aiWorkPlan = null;
-  const completionMessage = `Completed · ${approved} approved · ${skipped} skipped. The Applications queue has been updated.`;
-  toast(`${approved} leave request(s) approved${skipped ? ` · ${skipped} skipped` : ""}.`);
-  await renderAiWork();
-  if ($("ai-work-status")) $("ai-work-status").textContent = completionMessage;
+  if (aiWorkPlan) aiWorkPlan.skipped = skipped;
+  return completed;
 }
 
 async function getCampusTransferRequests() {
@@ -1510,6 +1439,7 @@ async function doSignout() {
 initialiseAgent37Widget();
 document.addEventListener("click",event=>{
   const theme=event.target.closest(".theme-toggle");if(theme)themeToggle();
+  if(event.target.closest("#ai-work-top-button")){if(!isProfileComplete(currentProfile)){openProfileCompletion(true);return;}renderPage("ai-work");}
   const nav=event.target.closest(".side-link[data-page]");if(nav){if(!isProfileComplete(currentProfile)){openProfileCompletion(true);return;}renderPage(nav.dataset.page);}
 });
 $("open-auth").onclick=$("hero-enter").onclick=$("closing-enter").onclick=showAuth;
