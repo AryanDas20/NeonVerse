@@ -15,14 +15,14 @@ This edition expands the earlier student/Warden application into four role-aware
 
 ### Identity, onboarding and access control
 
-- Email/password and Google sign-in.
-- Student signup with required profile fields: full name, university, registration ID, department, course and year.
+- Email/password and Google sign-in. Email/password registration sends a Firebase verification link; unverified accounts cannot enter the workspace. Any valid email address can register—there is no university-domain-only restriction.
+- Student signup collects full name, university full name and campus short name (for example, LPU). The required profile-completion step collects registration ID, department, course and year.
 - Profile-completion percentage and a guided first-run website tour; the tour can be restarted from Settings.
 - Role-based views for Student, Warden, Faculty and University Admin.
 - Staff roles are provisioned by an authorised project owner using Firestore `roles/{uid}` records. No Warden/Faculty/Admin email addresses are hard-coded in the frontend.
-- A completed student's membership starts as `pending`. A Warden, Faculty member or University Admin can verify or reject the campus profile. Directory and chat access are gated until approval.
+- A student's membership starts as `pending`. Staff review lists every unverified student in the same campus, including brand-new and incomplete profiles at 0% completion. Approval remains disabled until the student has verified their email and completed required profile fields. Directory and chat access are gated until approval.
 - Campus-scoped student and faculty directory; profile cards can start a direct conversation.
-- Existing campus alias normalisation includes LPU / Lovely Professional University / Phagwara variants. Add aliases only after deciding the canonical campus identity used by the institution.
+- Search normalisation is case-insensitive and campus identity matching ignores punctuation and spacing. LPU / Lovely Professional University / Phagwara variants resolve to one campus key. Campus short names are also indexed in directory and global people search; add institution-approved aliases in `CAMPUS_ALIASES` for additional universities.
 
 ### Chat and campus communication
 
@@ -65,6 +65,12 @@ This edition expands the earlier student/Warden application into four role-aware
 - Existing application workflow supports submission, cancellation while pending, staff review, approval, rejection and escalation.
 - Campus transfer requests require destination-campus staff approval.
 
+### Visual refresh and usability
+
+- Updated emerald/green and rose/pink theme with stronger text, input, button and chat-message contrast in dark and light modes.
+- Chat message surfaces and controls have explicit foreground/background colors for readability.
+- Directory and global search include full and short campus names and ignore letter case.
+
 ## 2. Files included
 
 | File | Purpose |
@@ -105,7 +111,7 @@ In **Firebase Console → Authentication → Sign-in method**, enable:
 - Email/Password
 - Google (optional)
 
-Under **Authentication → Settings → Authorized domains**, include `localhost` for local testing and your deployed Vercel hostname.
+Keep Firebase's **Email address verification** email template enabled. Under **Authentication → Settings → Authorized domains**, include `localhost` for local testing and your deployed Vercel hostname. The app does not restrict email domains; a user must be able to receive and click the verification link before they can sign in to the workspace.
 
 ### Step C — Create Firestore Database and publish rules
 
@@ -301,3 +307,9 @@ Before deployment, check JavaScript syntax with:
 node --check script.js
 ```
 
+
+## Latest admin and usability update (4 November 2026)
+
+The current package adds campus-scoped admin message moderation (archive/restore/delete), club edit/delete governance, event/RSVP cleanup, leave departure/return times, a Degree / programme onboarding field with a legacy `department` alias, case-insensitive client-side matching, and saved text-size preferences. See `UPDATE-NOTES.md` for the full list and validation limits.
+
+**Important:** Admin message moderation exposes campus conversations to the campus administrator role. Only assign `roles/{uid}.role = "admin"` to trusted university operators. The Firestore rules keep this access within the administrator's own `universityKey`; never replace them with public rules. A local syntax check does not prove that your Firebase project's deployed rules, indexes, authentication settings or existing data schema are correct.

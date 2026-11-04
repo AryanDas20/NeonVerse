@@ -189,9 +189,10 @@ service cloud.firestore {
           && request.resource.data.profileComplete == resource.data.profileComplete
           && request.resource.data.universityKey == resource.data.universityKey
           && request.resource.data.membershipStatus == resource.data.membershipStatus
+          && request.resource.data.emailVerified == request.auth.token.email_verified
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-            'name', 'email', 'phone', 'collegeId', 'department',
-            'course', 'year', 'hostel', 'room', 'bio', 'profileComplete',
+            'name', 'email', 'emailVerified', 'phone', 'collegeId', 'department', 'degree', 'degreeKey',
+            'course', 'courseKey', 'year', 'hostel', 'hostelKey', 'room', 'bio', 'profileComplete', 'universityShortName',
             'updatedAt'
           ])
         )
@@ -213,6 +214,7 @@ service cloud.firestore {
           && request.resource.data.createdAt == resource.data.createdAt
           && request.resource.data.membershipStatus == 'pending'
           && request.resource.data.profileComplete == true
+          && request.resource.data.emailVerified == request.auth.token.email_verified
           && request.resource.data.universityKey is string
           && request.resource.data.universityKey.size() > 0
           && request.resource.data.name is string && request.resource.data.name.size() > 0
@@ -222,8 +224,8 @@ service cloud.firestore {
           && request.resource.data.course is string && request.resource.data.course.size() > 0
           && request.resource.data.year is number
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-            'name', 'email', 'phone', 'collegeId', 'university', 'universityKey',
-            'department', 'course', 'year', 'hostel', 'room', 'bio', 'profileComplete', 'updatedAt'
+            'name', 'email', 'emailVerified', 'phone', 'collegeId', 'university', 'universityShortName', 'universityKey',
+            'department', 'degree', 'degreeKey', 'course', 'courseKey', 'year', 'hostel', 'hostelKey', 'room', 'bio', 'profileComplete', 'updatedAt'
           ]))
         ||
         // A pre-authorised staff account can publish its assigned role to its campus profile
@@ -358,20 +360,22 @@ service cloud.firestore {
       // Existing conversation documents are readable only by participants on
       // the same campus. Keep list queries provable with participants + universityKey.
       allow list: if signedIn()
-        && request.auth.uid in resource.data.participants
         && resource.data.keys().hasAny(['universityKey'])
         && sameCampus(resource.data.universityKey)
-        && (myProfile().membershipStatus == 'verified' || isStaff());
+        && ((request.auth.uid in resource.data.participants
+          && (myProfile().membershipStatus == 'verified' || isStaff()))
+          || roleName() == 'admin');
 
       // A direct-chat starter first checks its deterministic pair ID. Firestore
       // rules cannot evaluate participant fields on a missing document, so permit
       // only the non-existent pair lookup whose ID includes this verified user's UID.
       allow get: if signedIn() && (
         (exists(conversationDocPath(conversationId))
-          && request.auth.uid in resource.data.participants
           && resource.data.keys().hasAny(['universityKey'])
           && sameCampus(resource.data.universityKey)
-          && (myProfile().membershipStatus == 'verified' || isStaff()))
+          && ((request.auth.uid in resource.data.participants
+            && (myProfile().membershipStatus == 'verified' || isStaff()))
+            || roleName() == 'admin'))
         || (!exists(conversationDocPath(conversationId))
           && canCheckNewDirectConversation(conversationId))
       );
@@ -438,7 +442,8 @@ service cloud.firestore {
             && (myProfile().membershipStatus == 'verified' || isStaff());
         }
 
-        allow read: if isConversationMember();
+        allow read: if isConversationMember()
+          || (signedIn() && roleName() == 'admin' && sameCampus(parentConversation().universityKey));
 
         allow create: if isConversationMember()
           && request.resource.data.senderUid == request.auth.uid
@@ -447,7 +452,7 @@ service cloud.firestore {
           && request.resource.data.readBy is list
           && request.resource.data.readBy.hasOnly([request.auth.uid]);
 
-        allow update: if isConversationMember() && (
+        allow update: if (isConversationMember() && (
           (resource.data.senderUid == request.auth.uid
             && resource.data.deleted != true
             && request.resource.data.senderUid == resource.data.senderUid
@@ -459,7 +464,9 @@ service cloud.firestore {
             && request.resource.data.readBy is list
             && (!resource.data.keys().hasAny(['readBy']) || request.resource.data.readBy.hasAll(resource.data.readBy))
             && request.auth.uid in request.resource.data.readBy)
-        );
+        )) || (signedIn() && roleName() == 'admin'
+          && sameCampus(parentConversation().universityKey)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['archived', 'archivedAt', 'archivedBy']));
 
         allow delete: if (isConversationMember()
           && parentConversation().type == 'group'
@@ -563,7 +570,10 @@ service cloud.firestore {
         && request.resource.data.universityKey == myProfile().universityKey
         && request.resource.data.createdBy == request.auth.uid;
       allow update: if signedIn() && sameCampus(resource.data.universityKey)
-        && (roleName() == 'admin' || resource.data.createdBy == request.auth.uid);
+        && (roleName() == 'admin' || resource.data.createdBy == request.auth.uid)
+        && request.resource.data.universityKey == resource.data.universityKey
+        && request.resource.data.createdBy == resource.data.createdBy
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'category', 'description', 'openToJoin', 'updatedAt']);
       allow delete: if signedIn() && roleName() == 'admin'
         && sameCampus(resource.data.universityKey);
     }
@@ -632,9 +642,11 @@ service cloud.firestore {
           && request.resource.data.text is string
           && request.resource.data.text.size() > 0
           && request.resource.data.text.size() <= 4000;
-        allow update: if (channelMemberActive() || channelStaff())
+        allow update: if ((channelMemberActive() || channelStaff())
           && resource.data.senderUid == request.auth.uid
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['text', 'edited', 'updatedAt']);
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['text', 'edited', 'updatedAt']))
+          || (signedIn() && roleName() == 'admin' && channelStaff()
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['archived', 'archivedAt', 'archivedBy']));
         allow delete: if signedIn() && roleName() == 'admin' && channelStaff();
       }
     }
@@ -669,18 +681,33 @@ service cloud.firestore {
             && get(channelDoc(request.resource.data.channelId)).data.kind in ['class', 'subject', 'hostel', 'campus']
             && get(channelDoc(request.resource.data.channelId)).data.enrollmentMode == 'auto'
             && (get(channelDoc(request.resource.data.channelId)).data.kind == 'campus'
-              || ((!get(channelDoc(request.resource.data.channelId)).data.keys().hasAny(['department'])
-                || get(channelDoc(request.resource.data.channelId)).data.department == ''
-                || get(channelDoc(request.resource.data.channelId)).data.department == myProfile().department)
-              && (!get(channelDoc(request.resource.data.channelId)).data.keys().hasAny(['course'])
-                || get(channelDoc(request.resource.data.channelId)).data.course == ''
-                || get(channelDoc(request.resource.data.channelId)).data.course == myProfile().course)
+              || (((!get(channelDoc(request.resource.data.channelId)).data.keys().hasAny(['departmentKey'])
+                  && (!get(channelDoc(request.resource.data.channelId)).data.keys().hasAny(['department'])
+                    || get(channelDoc(request.resource.data.channelId)).data.department == ''
+                    || get(channelDoc(request.resource.data.channelId)).data.department == myProfile().department))
+                || (get(channelDoc(request.resource.data.channelId)).data.keys().hasAny(['departmentKey'])
+                  && (get(channelDoc(request.resource.data.channelId)).data.departmentKey == ''
+                    || (myProfile().keys().hasAny(['degreeKey']) && get(channelDoc(request.resource.data.channelId)).data.departmentKey == myProfile().degreeKey)
+                    || get(channelDoc(request.resource.data.channelId)).data.department == myProfile().department)))
+              && ((!get(channelDoc(request.resource.data.channelId)).data.keys().hasAny(['courseKey'])
+                  && (!get(channelDoc(request.resource.data.channelId)).data.keys().hasAny(['course'])
+                    || get(channelDoc(request.resource.data.channelId)).data.course == ''
+                    || get(channelDoc(request.resource.data.channelId)).data.course == myProfile().course))
+                || (get(channelDoc(request.resource.data.channelId)).data.keys().hasAny(['courseKey'])
+                  && (get(channelDoc(request.resource.data.channelId)).data.courseKey == ''
+                    || (myProfile().keys().hasAny(['courseKey']) && get(channelDoc(request.resource.data.channelId)).data.courseKey == myProfile().courseKey)
+                    || get(channelDoc(request.resource.data.channelId)).data.course == myProfile().course)))
               && (!get(channelDoc(request.resource.data.channelId)).data.keys().hasAny(['year'])
                 || get(channelDoc(request.resource.data.channelId)).data.year == null
                 || get(channelDoc(request.resource.data.channelId)).data.year == myProfile().year)
-              && (!get(channelDoc(request.resource.data.channelId)).data.keys().hasAny(['hostel'])
-                || get(channelDoc(request.resource.data.channelId)).data.hostel == ''
-                || get(channelDoc(request.resource.data.channelId)).data.hostel == myProfile().hostel))))
+              && ((!get(channelDoc(request.resource.data.channelId)).data.keys().hasAny(['hostelKey'])
+                  && (!get(channelDoc(request.resource.data.channelId)).data.keys().hasAny(['hostel'])
+                    || get(channelDoc(request.resource.data.channelId)).data.hostel == ''
+                    || get(channelDoc(request.resource.data.channelId)).data.hostel == myProfile().hostel))
+                || (get(channelDoc(request.resource.data.channelId)).data.keys().hasAny(['hostelKey'])
+                  && (get(channelDoc(request.resource.data.channelId)).data.hostelKey == ''
+                    || (myProfile().keys().hasAny(['hostelKey']) && get(channelDoc(request.resource.data.channelId)).data.hostelKey == myProfile().hostelKey)
+                    || get(channelDoc(request.resource.data.channelId)).data.hostel == myProfile().hostel))))))
           ||
           (request.resource.data.userUid == request.auth.uid
             && request.resource.data.status == 'active'
@@ -688,10 +715,18 @@ service cloud.firestore {
             && myProfile().membershipStatus == 'verified'
             && get(channelDoc(request.resource.data.channelId)).data.kind in ['class', 'subject']
             && get(channelDoc(request.resource.data.channelId)).data.enrollmentMode == 'featured'
-            && (!get(channelDoc(request.resource.data.channelId)).data.keys().hasAny(['department'])
-              || get(channelDoc(request.resource.data.channelId)).data.department == myProfile().department)
-            && (!get(channelDoc(request.resource.data.channelId)).data.keys().hasAny(['course'])
-              || get(channelDoc(request.resource.data.channelId)).data.course == myProfile().course)
+            && ((!get(channelDoc(request.resource.data.channelId)).data.keys().hasAny(['departmentKey'])
+                && (!get(channelDoc(request.resource.data.channelId)).data.keys().hasAny(['department'])
+                  || get(channelDoc(request.resource.data.channelId)).data.department == myProfile().department))
+              || (get(channelDoc(request.resource.data.channelId)).data.keys().hasAny(['departmentKey'])
+                && ((myProfile().keys().hasAny(['degreeKey']) && get(channelDoc(request.resource.data.channelId)).data.departmentKey == myProfile().degreeKey)
+                  || get(channelDoc(request.resource.data.channelId)).data.department == myProfile().department)))
+            && ((!get(channelDoc(request.resource.data.channelId)).data.keys().hasAny(['courseKey'])
+                && (!get(channelDoc(request.resource.data.channelId)).data.keys().hasAny(['course'])
+                  || get(channelDoc(request.resource.data.channelId)).data.course == myProfile().course))
+              || (get(channelDoc(request.resource.data.channelId)).data.keys().hasAny(['courseKey'])
+                && ((myProfile().keys().hasAny(['courseKey']) && get(channelDoc(request.resource.data.channelId)).data.courseKey == myProfile().courseKey)
+                  || get(channelDoc(request.resource.data.channelId)).data.course == myProfile().course)))
             && (!get(channelDoc(request.resource.data.channelId)).data.keys().hasAny(['year'])
               || get(channelDoc(request.resource.data.channelId)).data.year == null
               || get(channelDoc(request.resource.data.channelId)).data.year == myProfile().year))
