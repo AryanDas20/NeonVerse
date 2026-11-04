@@ -1,7 +1,7 @@
 // Paste your Firebase Web App configuration here.
 // Firebase Console → Project settings → General → Your apps → SDK setup.
 export const firebaseConfig = {
-apiKey: "AIzaSyCmcQG9hsyz8vPXFzIN6c7-9pplVSGHBdQ",
+ apiKey: "AIzaSyCmcQG9hsyz8vPXFzIN6c7-9pplVSGHBdQ",
   authDomain: "neonverse-18e00.firebaseapp.com",
   projectId: "neonverse-18e00",
   storageBucket: "neonverse-18e00.firebasestorage.app",

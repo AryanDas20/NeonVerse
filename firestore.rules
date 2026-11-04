@@ -173,6 +173,12 @@ service cloud.firestore {
         || staffForCampus(resource.data.universityKey)
       );
 
+      // Explicit staff list permission for campus-scoped student approval queries.
+      // The query must constrain universityKey to the signed-in staff member's campus.
+      allow list: if signedIn()
+        && isVerifier()
+        && resource.data.universityKey == myProfile().universityKey;
+
       // A student can edit their own personal details, but cannot change their
       // university membership, verification state, UID, role or creation time.
       allow update: if signedIn() && (
