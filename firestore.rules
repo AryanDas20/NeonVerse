@@ -797,41 +797,6 @@ service cloud.firestore {
       allow update, delete: if false;
     }
 
-    // Append-only results from real, non-mutating Agent37 evaluation probes.
-    // Only campus admins may create and read their campus evaluation records.
-    match /agent37EvaluationRuns/{runId} {
-      allow create: if signedIn()
-        && roleName() == 'admin'
-        && request.resource.data.keys().hasOnly([
-          'testId', 'testCase', 'category', 'expectedOutcome', 'actualOutcome', 'status',
-          'durationMs', 'source', 'actorUid', 'actorName', 'actorRole', 'universityKey', 'createdAt'
-        ])
-        && request.resource.data.actorUid == request.auth.uid
-        && request.resource.data.actorName is string
-        && request.resource.data.actorName.size() <= 120
-        && request.resource.data.actorRole == 'admin'
-        && request.resource.data.universityKey == myProfile().universityKey
-        && request.resource.data.testId in ['identity-consistency', 'role-write-denied', 'unauthenticated-route', 'role-escalation', 'cross-campus-filter']
-        && request.resource.data.status in ['passed', 'failed', 'blocked']
-        && request.resource.data.category in ['policy', 'reliability']
-        && request.resource.data.testId is string
-        && request.resource.data.testId.size() <= 80
-        && request.resource.data.testCase is string
-        && request.resource.data.testCase.size() <= 180
-        && request.resource.data.expectedOutcome is string
-        && request.resource.data.expectedOutcome.size() <= 500
-        && request.resource.data.actualOutcome is string
-        && request.resource.data.actualOutcome.size() <= 1000
-        && request.resource.data.durationMs is int
-        && request.resource.data.durationMs >= 0
-        && request.resource.data.source in ['firestore-client', '/api/agent37-work']
-        && request.resource.data.createdAt == request.time;
-      allow read: if signedIn()
-        && roleName() == 'admin'
-        && resource.data.universityKey == myProfile().universityKey;
-      allow update, delete: if false;
-    }
-
     match /{document=**} {
       allow read, write: if false;
     }
