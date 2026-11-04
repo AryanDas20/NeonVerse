@@ -380,3 +380,36 @@ See [`AI-WORK-START-HERE.md`](AI-WORK-START-HERE.md) for the step-by-step deploy
 
 ### Agent37 AI Work (expanded)
 Staff can use natural language for application decisions and supported campus creation tasks (clubs, events, notices and role-permitted chat channels). Administrators can issue reversible campus access restrictions for a uniquely identified user. AI Work logs the request and execution summary in `aiWorkHistory`. It does not permanently delete Firebase Auth accounts or change roles.
+
+
+## Agent37 challenge dashboards — 4 November 2026
+
+This package adds two administrator-only pages under **Agent37 Control**:
+
+- **Agent37 Evaluation Dashboard** — timestamped records from real, non-mutating evaluation probes; task success and average execution time from the signed-in administrator's real AI Work history; policy compliance from evaluated security probes; pass/fail/blocked totals; result table and outcome chart.
+- **Agent37 Safety & Reliability Center** — campus-scoped live listeners for the existing application workflow, campus-transfer queue, the signed-in administrator's own AI Work history, moderation state and evaluation probe records. It includes safe policy probes and filters for actor, role, source, action, decision and date.
+
+### What the tests actually do
+
+The probe runner uses the existing Firestore reads and the existing `POST /api/agent37-work` endpoint. It checks the signed-in account's own role/profile, attempts a same-value no-op write to its own role document to confirm Firestore denies all role writes, tests that the endpoint rejects a missing Firebase ID token, asks the existing Agent37 route for an unsupported role-escalation action, and submits a synthetic foreign-campus payload to confirm the server filters it. The runner **never calls** `executeAiWorkPlan()` and never executes any returned action. The two authenticated Agent37 probes call the configured Agent37 service and may consume API quota.
+
+Every probe response is saved as an append-only `agent37EvaluationRuns` document with the test name, expected/actual outcome, pass/fail/blocked status, duration and server timestamp. Firestore rules restrict reads and creates to the campus administrator and campus key; updates/deletes are denied. The Firestore index includes campus key plus descending creation time.
+
+### Deployment steps
+
+1. Deploy the updated `firestore.rules` to Firebase Console → Firestore Database → Rules (or `firebase deploy --only firestore:rules`). Review and merge these changes with any rules you have added outside this ZIP; do not overwrite newer project-specific rules blindly.
+2. Deploy the updated `firestore.indexes.json` (`firebase deploy --only firestore:indexes`) or create the composite index if Firebase shows an index link.
+3. Deploy the updated `script.js` and `style.css` with the rest of the existing site. No new API route or browser secret is introduced.
+4. Sign in with a Firebase account whose authoritative `roles/{uid}.role` is `admin`, has a verified campus profile, and confirm the existing Vercel environment variables for `/api/agent37-work` are configured.
+5. Open **Agent37 Control → Safety & reliability** and run the probes. The evaluation dashboard will show only persisted responses; blocked infrastructure/configuration results are not counted as passes.
+
+### Measurement limitations are intentional
+
+- Task success rate and average task execution time use the signed-in administrator's own `aiWorkHistory` records because current Firestore rules do not permit reading other users' private task history. The evaluation dashboard uses the newest 200 campus-scoped test records.
+- Human approval accuracy remains **Not measured** until the institution supplies independent ground-truth labels for decisions. The current application records show what a reviewer decided, not whether that decision was correct.
+- The current backend does not expose a central policy-decision event stream or recovery/retry-chain telemetry. Monitor counters are explicitly derived from existing application decisions, the current administrator's AI Work history and evaluation probes; they are not presented as complete platform-wide security logs.
+- Existing `aiWorkHistory` read rules permit users to read their own task history only. The Safety Center therefore does not claim to show other administrators' private Agent37 history.
+- Historical AI Work records created before this update do not contain measured execution durations or blocked-action counts. Those values remain unavailable for old records; new runs record elapsed time and skipped actions.
+
+
+For the judge walkthrough, metric definitions, deployment checks and safety boundaries, see [`agent37/CHALLENGE-DEMO-GUIDE.md`](agent37/CHALLENGE-DEMO-GUIDE.md).
