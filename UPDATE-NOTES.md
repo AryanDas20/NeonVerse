@@ -54,3 +54,12 @@ This revision builds on the Green/Pink edition and adds:
 - This resolves the Firebase Console parser warning: `Missing 'if' before conditional expression` at the affected rule line.
 - Rechecked JavaScript syntax, Firebase config/index JSON parsing, rule delimiter balance and `allow`-statement `if` presence.
 - This local static validation does not replace publishing the rules in the intended Firebase project or testing with the Firebase Rules Emulator/Console simulator.
+
+## Agent37 in-website help assistant — November 2026
+
+- Added a floating Agent37-powered NeonVerse AI help widget for signed-in users and staff.
+- Added `api/agent37-chat.js`, a same-origin Vercel Function that verifies Firebase ID tokens, checks verified email, constrains message size, derives a separate Agent37 session per Firebase user/conversation, and keeps the Agent37 key on the server.
+- Added `agent37/SETUP-GUIDE.md` and `agent37/AGENT-INSTRUCTIONS.md` covering the Personal-vs-Cloud distinction and safe configuration.
+- Added `vercel.json` with a 300-second function duration and `.env.example` with placeholders only.
+- The assistant is read-only and is not connected to Firestore records or university ERP data. It cannot perform approvals, deletions, role changes or other privileged actions.
+- The widget remains unconfigured until Vercel environment variables are supplied. The official Agent API sample uses `X-Agent37-Key` at `/v1/responses`; an instance ID alone is not enough.

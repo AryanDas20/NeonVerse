@@ -51,8 +51,8 @@ function toast(message) {
 }
 function setAuthError(message) { $("auth-error").textContent = message; $("auth-error").classList.remove("hidden"); }
 function clearAuthError() { $("auth-error").classList.add("hidden"); }
-function showLanding() { $("auth-screen").classList.add("hidden"); $("app-shell").classList.add("hidden"); $("landing").classList.remove("hidden"); }
-function showAuth() { $("landing").classList.add("hidden"); $("app-shell").classList.add("hidden"); $("auth-screen").classList.remove("hidden"); }
+function showLanding() { setAgent37Visible(false); $("auth-screen").classList.add("hidden"); $("app-shell").classList.add("hidden"); $("landing").classList.remove("hidden"); }
+function showAuth() { setAgent37Visible(false); $("landing").classList.add("hidden"); $("app-shell").classList.add("hidden"); $("auth-screen").classList.remove("hidden"); }
 function initFirebase() {
   if (!configured) { console.warn("NeonVerse: update firebase-config.js with your Firebase Web App values."); return false; }
   try { const app = initializeApp(firebaseConfig); auth = getAuth(app); db = getFirestore(app); return true; }
@@ -198,6 +198,7 @@ async function finishLogin(user, extra = {}) {
     if (currentProfile.membershipStatus === "verified") await autoEnrollStudentIntoMatchingChannels(currentProfile).catch(error => console.warn("Channel enrolment sync skipped", error));
     watchSessionDocuments();
     $("auth-screen").classList.add("hidden"); $("landing").classList.add("hidden"); $("app-shell").classList.remove("hidden");
+    setAgent37Visible(true);
     configureNavigation();
     await loadWorkspace();
     if (isProfileComplete(currentProfile)) maybeTour();
@@ -1163,6 +1164,183 @@ async function globalSearch() {
   const draw=async()=>{const term=normaliseSearch(input.value);let html=pages.filter(page=>normaliseSearch(page).includes(term)).map(page=>`<div class="search-result" data-search-page="${esc(page)}"><b>${esc(page)}</b><small>Open workspace section</small></div>`).join("");if(term.length>=2 && communityVerified()){try{if(!peopleCache.length)peopleCache=await getCampusPeople();html+=peopleCache.filter(person=>normaliseSearch([person.name,person.email,person.phone,person.collegeId,person.university,person.universityShortName].join(" ")).includes(term)).slice(0,12).map(person=>`<div class="search-result" data-search-person="${esc(person.uid)}"><b>${esc(person.name)}</b><small>${esc(person.department||"")} · ${esc(person.collegeId||"")}</small></div>`).join("");}catch(error){console.debug(error);}}$("global-search-results").innerHTML=html||empty("⌕","No matching results","Try another search term.");document.querySelectorAll("[data-search-page]").forEach(el=>el.onclick=()=>{const pageMap={"Student directory":"directory","Notice board":"notices","Hostel services":"hostel","Events & clubs":"events","Class & subject groups":"channels","Faculty workspace":"faculty","Warden workspace":"warden","University administration":"university","My profile":"profile"};closeModal();renderPage(pageMap[el.dataset.searchPage]||el.dataset.searchPage.toLowerCase());});document.querySelectorAll("[data-search-person]").forEach(el=>el.onclick=()=>{closeModal();showStudentProfile(el.dataset.searchPerson);});};
   input.oninput=draw;await draw();input.focus();
 }
+// Agent37 chat widget. Secrets stay in the Vercel serverless function; the
+// browser sends only a Firebase ID token, the user's message and display context.
+let agent37Busy = false;
+let agent37ConversationId = null;
+let agent37History = [];
+const agent37HistoryLimit = 30;
+function setAgent37Visible(visible) {
+  const root = $("agent37-widget");
+  if (!root) return;
+  root.classList.toggle("hidden", !visible || !currentUser);
+  if (!visible) {
+    const panel = $("agent37-panel");
+    if (panel) panel.classList.add("hidden");
+    const launcher = $("agent37-launcher");
+    if (launcher) launcher.setAttribute("aria-expanded", "false");
+  }
+}
+function agent37ConversationStorageKey() { return `neonverse-agent37-conversation-${currentUser?.uid || "guest"}`; }
+function agent37HistoryStorageKey() { return `neonverse-agent37-history-${currentUser?.uid || "guest"}-${agent37ConversationId || "new"}`; }
+function getAgent37ConversationId() {
+  if (!currentUser) return null;
+  const key = agent37ConversationStorageKey();
+  let id = localStorage.getItem(key);
+  if (!id || !/^[A-Za-z0-9_-]{12,80}$/.test(id)) {
+    id = (globalThis.crypto?.randomUUID?.() || `nv_${currentUser.uid}_${Date.now()}_${Math.random().toString(36).slice(2)}`).replace(/[^A-Za-z0-9_-]/g, "_");
+    localStorage.setItem(key, id);
+  }
+  return id;
+}
+function saveAgent37History() {
+  if (!currentUser) return;
+  try { localStorage.setItem(agent37HistoryStorageKey(), JSON.stringify(agent37History.slice(-agent37HistoryLimit))); }
+  catch (error) { console.warn("Agent37 chat history could not be saved locally", error); }
+}
+function addAgent37Message(role, text, persist = true) {
+  const entry = {role, text:String(text || ""), at:Date.now()};
+  agent37History.push(entry);
+  if (agent37History.length > agent37HistoryLimit) agent37History = agent37History.slice(-agent37HistoryLimit);
+  const list = $("agent37-messages");
+  if (list) {
+    const row = document.createElement("div");
+    row.className = `agent37-message ${role === "user" ? "user" : role === "error" ? "error" : "assistant"}`;
+    const bubble = document.createElement("div");
+    bubble.className = "agent37-bubble";
+    bubble.textContent = entry.text;
+    row.appendChild(bubble);
+    list.appendChild(row);
+    list.scrollTop = list.scrollHeight;
+  }
+  if (persist) saveAgent37History();
+}
+function renderAgent37History() {
+  const list = $("agent37-messages");
+  if (!list) return;
+  list.replaceChildren();
+  agent37History.forEach(item => {
+    const row = document.createElement("div");
+    row.className = `agent37-message ${item.role === "user" ? "user" : item.role === "error" ? "error" : "assistant"}`;
+    const bubble = document.createElement("div");
+    bubble.className = "agent37-bubble";
+    bubble.textContent = item.text;
+    row.appendChild(bubble);
+    list.appendChild(row);
+  });
+  list.scrollTop = list.scrollHeight;
+}
+function initialiseAgent37Conversation() {
+  if (!currentUser) return;
+  agent37ConversationId = getAgent37ConversationId();
+  try {
+    const stored = JSON.parse(localStorage.getItem(agent37HistoryStorageKey()) || "[]");
+    agent37History = Array.isArray(stored) ? stored.filter(item => item && ["user","assistant","error"].includes(item.role) && typeof item.text === "string").slice(-agent37HistoryLimit) : [];
+  } catch { agent37History = []; }
+  if (!agent37History.length) {
+    const role = roleLabel(currentProfile?.role || "student");
+    agent37History = [{role:"assistant", text:`Hi ${currentProfile?.name || "there"}! I'm NeonVerse AI, powered by Agent37. I can guide you through the website as a ${role.toLowerCase()}—for example, applications, clubs, messages, hostel services and admin tools. I cannot view your private records or perform actions. What would you like help with?`, at:Date.now()}];
+    saveAgent37History();
+  }
+  renderAgent37History();
+}
+function setAgent37Typing(show) {
+  const list = $("agent37-messages");
+  if (!list) return;
+  const existing = $("agent37-typing-row");
+  if (existing) existing.remove();
+  if (show) {
+    const row = document.createElement("div");
+    row.id = "agent37-typing-row";
+    row.className = "agent37-message assistant";
+    const bubble = document.createElement("div");
+    bubble.className = "agent37-bubble";
+    const dots = document.createElement("span");
+    dots.className = "agent37-typing";
+    dots.setAttribute("aria-label", "Agent37 is thinking");
+    for (let i=0;i<3;i++) dots.appendChild(document.createElement("i"));
+    bubble.appendChild(dots); row.appendChild(bubble); list.appendChild(row); list.scrollTop = list.scrollHeight;
+  }
+}
+async function sendAgent37Message(event) {
+  event?.preventDefault?.();
+  const input = $("agent37-input");
+  const send = $("agent37-send");
+  const message = String(input?.value || "").trim();
+  const senderUid = currentUser?.uid;
+  if (!message || agent37Busy || !currentUser) return;
+  if (message.length > 2500) { toast("Please keep your message under 2,500 characters."); return; }
+  input.value = "";
+  addAgent37Message("user", message);
+  agent37Busy = true;
+  if (send) send.disabled = true;
+  setAgent37Typing(true);
+  try {
+    const idToken = await currentUser.getIdToken();
+    const response = await fetch("/api/agent37-chat", {
+      method:"POST",
+      headers:{"Content-Type":"application/json", "Authorization":`Bearer ${idToken}`},
+      body:JSON.stringify({
+        message,
+        conversationId:agent37ConversationId,
+        role:currentProfile?.role || "student",
+        campus:currentProfile?.university || currentProfile?.universityShortName || ""
+      })
+    });
+    const result = await response.json().catch(() => ({}));
+    if (currentUser?.uid !== senderUid) return;
+    if (!response.ok) {
+      const friendly = result.error || (response.status === 503 ? "Agent37 is not configured yet. Follow the setup guide in the project ZIP." : "The AI assistant could not respond. Please try again.");
+      throw new Error(friendly);
+    }
+    if (!result.reply || typeof result.reply !== "string") throw new Error("Agent37 returned an empty reply. Please try again.");
+    setAgent37Typing(false);
+    addAgent37Message("assistant", result.reply);
+  } catch (error) {
+    if (currentUser?.uid !== senderUid) return;
+    setAgent37Typing(false);
+    const messageText = error?.name === "AbortError" ? "The request timed out. Check that your Agent37 instance is running, then try again." : (error?.message || "The AI assistant is temporarily unavailable.");
+    addAgent37Message("error", messageText);
+  } finally {
+    agent37Busy = false;
+    if (send) send.disabled = false;
+    input?.focus();
+  }
+}
+function startNewAgent37Chat() {
+  if (!currentUser || agent37Busy) return;
+  if (!confirm("Start a new AI conversation? Your previous conversation will remain in this browser's local history.")) return;
+  agent37ConversationId = (globalThis.crypto?.randomUUID?.() || `nv_${currentUser.uid}_${Date.now()}_${Math.random().toString(36).slice(2)}`).replace(/[^A-Za-z0-9_-]/g, "_");
+  localStorage.setItem(agent37ConversationStorageKey(), agent37ConversationId);
+  agent37History = [];
+  initialiseAgent37Conversation();
+}
+function initialiseAgent37Widget() {
+  if ($("agent37-widget")?.dataset.ready === "1") return;
+  const root = $("agent37-widget");
+  if (!root) return;
+  root.dataset.ready = "1";
+  $("agent37-launcher").addEventListener("click", () => {
+    const panel = $("agent37-panel");
+    const opening = panel.classList.contains("hidden");
+    panel.classList.toggle("hidden", !opening);
+    $("agent37-launcher").setAttribute("aria-expanded", String(opening));
+    if (opening) { initialiseAgent37Conversation(); $("agent37-input").focus(); }
+  });
+  $("agent37-close").addEventListener("click", () => {
+    $("agent37-panel").classList.add("hidden");
+    $("agent37-launcher").setAttribute("aria-expanded", "false");
+  });
+  $("agent37-form").addEventListener("submit", sendAgent37Message);
+  $("agent37-new-chat").addEventListener("click", startNewAgent37Chat);
+  $("agent37-quick-prompts").addEventListener("click", event => {
+    const button = event.target.closest("[data-agent37-prompt]");
+    if (!button || agent37Busy) return;
+    $("agent37-input").value = button.dataset.agent37Prompt || "";
+    $("agent37-form").requestSubmit();
+  });
+}
+
 async function doSignout() {
   if(unsubscribeMessages)unsubscribeMessages();if(unsubscribeNotifications)unsubscribeNotifications();
   stopSessionWatchers();
@@ -1170,6 +1348,7 @@ async function doSignout() {
 }
 
 // Navigation, modal and app controls.
+initialiseAgent37Widget();
 document.addEventListener("click",event=>{
   const theme=event.target.closest(".theme-toggle");if(theme)themeToggle();
   const nav=event.target.closest(".side-link[data-page]");if(nav){if(!isProfileComplete(currentProfile)){openProfileCompletion(true);return;}renderPage(nav.dataset.page);}

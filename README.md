@@ -144,6 +144,44 @@ Alternatively, when Firestore shows a missing-index error, open the Firebase-pro
 5. Add the deployed Vercel domain to Firebase Authentication's authorized domains.
 6. Open the deployed site and test with a student account and each provisioned staff role.
 
+
+## Agent37-powered NeonVerse AI assistant
+
+This package adds a floating in-website AI help widget for signed-in users and a secure Vercel Function that calls the Agent37 Agent API. The browser never receives the Agent37 API key.
+
+### Important: Personal and Cloud API are different
+
+Hackyard's setup message describes Agent37 Personal (free personal agent) and Agent37 Cloud API as different products. The widget code in this package uses the documented Agent API endpoint (`https://INSTANCE_ID.agent37.app/v1/responses`) and the `X-Agent37-Key` header. An instance ID alone is not sufficient for this API call. If you are following the Hackyard founder's instruction to use only the Personal free plan and not the Cloud API page, ask a Hackyard host whether that Personal instance exposes this endpoint and which credential can be used. Do not add a card, buy a plan, top up, or create a Cloud API workspace against that instruction. The widget remains unconfigured until the correct endpoint and credential are provided.
+
+### Vercel environment variables
+
+Open Vercel → your NeonVerse project → Settings → Environment Variables and add:
+
+- `FIREBASE_PROJECT_ID` — the same project ID used in `firebase-config.js`.
+- `AGENT37_INSTANCE_URL` — for example `https://YOUR_INSTANCE_ID.agent37.app`; do not append `/v1/responses`.
+- `AGENT37_API_KEY` — the secret key explicitly authorised for the Agent API. Store it in Vercel only, never in frontend files or GitHub.
+
+Redeploy after saving environment variables. Opening `/api/agent37-chat` should return `{ "service": "NeonVerse Agent37 assistant", "configured": true }` when the three values exist. This status checks only that values are present; it does not validate the key or instance.
+
+### What the assistant does
+
+- Provides role-tailored guidance to Students, Wardens, Faculty and Administrators.
+- Explains NeonVerse workflows such as account verification, applications, leave, hostel services, messages, clubs, events, academics and settings.
+- Keeps a separate Agent37 session per signed-in Firebase UID and browser conversation ID.
+- Stores the visible recent transcript in the user's local browser storage; it is not a cloud-synchronised transcript.
+- Does not receive private profile documents, registration IDs, emails, Firestore data or university ERP data.
+- Cannot approve requests, delete content, change roles, or perform administrative operations. It is a read-only guide.
+
+### Deployment notes
+
+- The new backend route is `api/agent37-chat.js`; Vercel detects it as a serverless function.
+- `vercel.json` allows up to 300 seconds for the route to accommodate a sleeping/starting agent. Vercel's available function duration depends on the project's compute configuration and plan.
+- The route validates Firebase ID tokens using Google's published Firebase signing certificates, checks verified email, and sends only a bounded message plus role/campus labels to Agent37.
+- It has a best-effort per-function-instance rate limit. For a larger public deployment, replace that with a shared rate-limit store.
+- No Firestore rules change is required for assistant sessions: the session ID is derived server-side and is not stored in Firestore.
+
+For the beginner setup walkthrough and troubleshooting, read [`agent37/SETUP-GUIDE.md`](agent37/SETUP-GUIDE.md). For the recommended agent behavior instructions, read [`agent37/AGENT-INSTRUCTIONS.md`](agent37/AGENT-INSTRUCTIONS.md).
+
 ## 4. How to add Warden, Faculty and Admin login accounts
 
 There are **no pre-approved email IDs** inside the ZIP. The trusted role is attached to the Firebase Authentication UID, not to a frontend email comparison. This prevents someone from becoming staff simply by typing a staff email address into a public form.
