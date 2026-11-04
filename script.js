@@ -364,7 +364,7 @@ function configureNavigation() {
   };
   addGroup("COMMUNITY", [["channels","▣","Class & subject groups"]]);
   if (currentProfile?.role === "faculty") addGroup("FACULTY DESK", [["faculty","▤","Faculty workspace"]]);
-  if (currentProfile?.role === "warden") addGroup("WARDEN DESK", [["warden","⌂","Warden workspace"]]);
+  if (["warden", "admin"].includes(currentProfile?.role)) addGroup("WARDEN DESK", [["warden","⌂","Warden workspace"]]);
   if (currentProfile?.role === "admin") addGroup("UNIVERSITY OFFICE", [["university","◈","University administration"]]);
   addGroup("AI WORK", [["ai-work","✦","AI Work"]]);
 }
