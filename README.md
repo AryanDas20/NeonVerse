@@ -170,15 +170,35 @@ Redeploy after saving environment variables. Opening `/api/agent37-chat` should 
 - Keeps a separate Agent37 session per signed-in Firebase UID and browser conversation ID.
 - Stores the visible recent transcript in the user's local browser storage; it is not a cloud-synchronised transcript.
 - Does not receive private profile documents, registration IDs, emails, Firestore data or university ERP data.
-- Cannot approve requests, delete content, change roles, or perform administrative operations. It is a read-only guide.
+- The floating chat widget is a read-only guide. The separate staff-only AI Work page can prepare a narrowly restricted leave-approval plan, subject to server validation and staff confirmation.
+
+### AI Work — staff task automation (new)
+
+A separate **AI Work** navigation entry is shown only to Warden, Faculty and University Administrator accounts. Staff can describe a task in plain language. In this release, Agent37 can prepare a plan for pending leave approvals, and NeonVerse only allows the plan to include leave applications whose inclusive date span is **1–3 calendar days**. The staff member reviews the names/dates and clicks **Confirm & execute** before changes are written. Applications longer than 3 calendar days, invalid dates, non-leave applications, non-pending records and records outside the staff member's campus are excluded.
+
+The workflow is intentionally controlled rather than giving an LLM unrestricted database or browser access:
+
+1. The browser loads up to 100 pending applications using the signed-in staff member's existing Firestore permissions. Only compact metadata (application ID, title/type, student name, leave dates/times and status) is sent to Agent37. Application reasons, email addresses, phone numbers and document references are not sent.
+2. `api/agent37-work.js` verifies the Firebase ID token and reads the caller's own `roles/{uid}` and `profiles/{uid}` documents through Firestore Rules. Only `warden`, `faculty` and `admin` roles with a verified campus profile can request a plan.
+3. The backend asks Agent37 for structured JSON. It independently filters the plan so the only writable action is `approve_leave` for a pending leave record with a valid duration of 1, 2 or 3 calendar dates. The LLM cannot directly access Firestore.
+4. A staff member confirms the displayed plan. The browser re-reads each document and checks its status, dates, type and campus before submitting the update. Firestore Rules also require that a staff-reviewed application is still `pending` at write time.
+5. Successful approvals add the review UID, timestamp/comment and history entry, and send the existing in-app application notification to the student.
+
+This initial release does **not** automatically reject requests, publish notices, edit profiles, change roles, create accounts or run arbitrary instructions against the university system. A staff confirmation is deliberately required for consequential leave decisions. It is not a substitute for university policy or a human review of supporting documents. The page currently scans up to 100 pending applications in the loaded campus queue; split large queues into batches and review the Applications page for anything beyond that limit.
+
+#### Additional Vercel settings
+
+The new route uses the same three server-only variables as the existing assistant: `FIREBASE_PROJECT_ID`, `AGENT37_INSTANCE_URL` and `AGENT37_API_KEY`. No new browser key or Firebase Admin service-account key is required. The Agent37 key is never added to `script.js`, `index.html`, or GitHub. `api/agent37-work.js` has the same configured Vercel function-duration ceiling as the existing Agent37 route; the actual maximum is subject to your Vercel plan and function settings.
+
+**Agent37 Personal-plan warning:** the Hackyard instructions you pasted say to use Agent37 Personal at `https://www.agent37.com/personal` and not to add a card or use Cloud API. The public Agent API documentation currently describes `POST https://{instanceId}.agent37.app/v1/responses` with `X-Agent37-Key`; the instance ID alone is not an API credential. It is not confirmed that a Personal Free agent provides the external API key/access needed by this website. Ask a Hackyard host whether your Personal Free instance supports this API and how to obtain the permitted key without entering a card. Do not create a Cloud API instance, add a payment card, buy a plan or top up just to make this feature work when following the challenge's Personal-free instructions. Until Agent37 confirms a supported endpoint and credential, the AI Work UI will show that it is not configured or cannot connect.
 
 ### Deployment notes
 
-- The new backend route is `api/agent37-chat.js`; Vercel detects it as a serverless function.
+- The backend routes are `api/agent37-chat.js` (read-only help) and `api/agent37-work.js` (staff-only task planning); Vercel detects both as serverless functions.
 - `vercel.json` allows up to 300 seconds for the route to accommodate a sleeping/starting agent. Vercel's available function duration depends on the project's compute configuration and plan.
 - The route validates Firebase ID tokens using Google's published Firebase signing certificates, checks verified email, and sends only a bounded message plus role/campus labels to Agent37.
 - It has a best-effort per-function-instance rate limit. For a larger public deployment, replace that with a shared rate-limit store.
-- No Firestore rules change is required for assistant sessions: the session ID is derived server-side and is not stored in Firestore.
+- The Firestore Rules change in this release requires staff-reviewed application updates to target a record that is still `pending`, which helps prevent a stale AI Work plan from overwriting a decision already made by another staff member.
 
 For the beginner setup walkthrough and troubleshooting, read [`agent37/SETUP-GUIDE.md`](agent37/SETUP-GUIDE.md). For the recommended agent behavior instructions, read [`agent37/AGENT-INSTRUCTIONS.md`](agent37/AGENT-INSTRUCTIONS.md).
 
@@ -351,3 +371,7 @@ node --check script.js
 The current package adds campus-scoped admin message moderation (archive/restore/delete), club edit/delete governance, event/RSVP cleanup, leave departure/return times, a Degree / programme onboarding field with a legacy `department` alias, case-insensitive client-side matching, and saved text-size preferences. See `UPDATE-NOTES.md` for the full list and validation limits.
 
 **Important:** Admin message moderation exposes campus conversations to the campus administrator role. Only assign `roles/{uid}.role = "admin"` to trusted university operators. The Firestore rules keep this access within the administrator's own `universityKey`; never replace them with public rules. A local syntax check does not prove that your Firebase project's deployed rules, indexes, authentication settings or existing data schema are correct.
+
+## AI Work implementation and first-time setup
+
+See [`AI-WORK-START-HERE.md`](AI-WORK-START-HERE.md) for the step-by-step deployment, Firestore Rules publication, Agent37 Personal-plan credential check, Vercel environment variables and safe test procedure.

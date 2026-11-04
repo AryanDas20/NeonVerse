@@ -51,17 +51,33 @@ The website code calls a same-origin Vercel Function at `/api/agent37-chat`. The
 
 - Each Firebase user gets a separate Agent37 conversation session, derived on the server from their verified Firebase UID and browser conversation ID.
 - The browser stores the visible recent transcript in that browser's local storage. It is not a cloud-synchronised chat history.
-- The assistant receives only the question, role label and campus name. It does not receive private profile details, registration IDs, Firestore documents, or staff records.
-- It is a **read-only guide**. It cannot approve requests, delete messages, delete clubs, change roles, or alter university records.
-- The API has a best-effort per-instance rate limit and a 2,500-character message limit. Use Agent37 usage/billing controls to monitor actual cost.
+- The floating chat widget receives only the question, role label and campus name. The separate AI Work endpoint sends Agent37 only compact pending-application metadata (student display name, title/type, dates and status); it does not send registration IDs, phone numbers, email addresses, application reasons or supporting-document references.
+- The floating chat widget is a **read-only guide**. The separate AI Work page is a restricted staff task planner. In this release it may propose only 1–3 calendar-day pending leave approvals, and a staff member must confirm before NeonVerse writes to Firestore.
+- The floating chat endpoint has a best-effort per-instance rate limit and a 2,500-character message limit. AI Work separately limits each instruction to 1,600 characters and up to 100 pending campus applications per run. Use Agent37 usage/billing controls to monitor actual cost.
 - If the instance sleeps, the first response may take longer. Agent37 and Vercel function timeout settings both affect the request.
 
-## E. Troubleshooting
+## E. Use the new staff-only AI Work page
+
+After the Agent37 API connection is confirmed and working:
+
+1. Sign in with an authorised Warden, Faculty or University Administrator account. The account must have its role in `roles/{uid}` and a verified campus profile in `profiles/{uid}`.
+2. Open the new **AI Work** entry in the left navigation. Students and College verifier accounts do not see this entry, and the backend rejects them even if they manually call the endpoint.
+3. Try the prompt chip **Review leaves up to 3 days**, or write: `Approve all pending hostel leave applications that are not more than 3 calendar days. Leave longer requests for manual review.`
+4. Agent37 reads compact metadata from up to 100 pending applications in your campus queue and returns a proposed plan. Student phone numbers, email addresses, application reasons and document references are not sent to Agent37.
+5. Check every proposed student and date. Click **Confirm & execute** only when the list is correct. NeonVerse re-reads each application and independently enforces the 1–3 calendar-day limit before attempting the update.
+6. Approved records receive a review-history entry and students receive the website's in-app application notification. Check the Applications page to confirm the result.
+
+For this initial release, AI Work can only propose approval of pending leave applications with valid dates covering 1, 2 or 3 calendar dates (both the first and last dates count). It does not reject requests, publish notices, modify profiles/roles, or execute arbitrary instructions. Longer, invalid, non-leave and non-pending requests are never approved by this automation. The human confirmation is intentional because a leave decision is an official campus action.
+
+## F. Troubleshooting
 
 - `503 assistant has not been configured`: one or more of the three Vercel environment variables is missing. Add them and redeploy.
 - `401 sign-in session could not be verified`: check `FIREBASE_PROJECT_ID`, make sure the user verified their Firebase email, and sign in again.
 - `Agent37 rejected the configured key`: key is wrong, revoked, or not authorised for the selected instance.
-- `Agent37 did not complete this reply`: check instance status, model/provider setup and available managed model budget or provider credits.
+- `Agent37 did not complete this reply`: check instance status, model/provider setup and available model access/credits.
+- `AI Work is available only to authorised staff`: check that the current user's `roles/{uid}.role` is `warden`, `faculty` or `admin` and their own `profiles/{uid}` document has a campus key and `membershipStatus: "verified"`.
+- `No pending campus applications`: open Applications and verify there are pending requests for the signed-in staff member's campus. The feature currently scans up to 100 queue entries per run.
+- `Agent37 rejected the configured key` on AI Work: this route requires the same externally authorised Agent API endpoint/key as the assistant. An instance ID alone is not enough. Ask a Hackyard host to confirm support for the Personal Free agent before adding or paying for a different Agent37 product.
 - `504` or timeout: check if the instance is asleep/starting and whether the Vercel project supports the configured function duration.
 
 Official Agent37 API reference: https://www.agent37.com/docs/agents-api/chat

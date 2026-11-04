@@ -3,6 +3,9 @@
   "functions": {
     "api/agent37-chat.js": {
       "maxDuration": 300
+    },
+    "api/agent37-work.js": {
+      "maxDuration": 300
     }
   }
 }
