@@ -149,9 +149,10 @@ Alternatively, when Firestore shows a missing-index error, open the Firebase-pro
 
 This package adds a floating in-website AI help widget for signed-in users and a secure Vercel Function that calls the Agent37 Agent API. The browser never receives the Agent37 API key.
 
-### Important: Personal and Cloud API are different
+### Agent37 integration route
 
-Hackyard's setup message describes Agent37 Personal (free personal agent) and Agent37 Cloud API as different products. The widget code in this package uses the documented Agent API endpoint (`https://INSTANCE_ID.agent37.app/v1/responses`) and the `X-Agent37-Key` header. An instance ID alone is not sufficient for this API call. If you are following the Hackyard founder's instruction to use only the Personal free plan and not the Cloud API page, ask a Hackyard host whether that Personal instance exposes this endpoint and which credential can be used. Do not add a card, buy a plan, top up, or create a Cloud API workspace against that instruction. The widget remains unconfigured until the correct endpoint and credential are provided.
+For NeonVerse website integration, use the documented **Agent37 Cloud API** route with the Hackyard promotional credit if it is available to your account. Claim it at `https://www.agent37.com/redeem/HACKYARD` before creating resources; the event instructions say no card is needed. Do not add a card, enable auto top-up, buy a plan, or manually top up. The Personal free agent is a separate product and its instance ID alone does not authenticate the external website API. Follow `agent37/SETUP-GUIDE.md` for Cloud API key, instance, budget and Vercel setup. The backend keeps the key server-side and calls the instance's `/v1/responses` endpoint with `X-Agent37-Key`.
+
 
 ### Vercel environment variables
 
@@ -190,7 +191,7 @@ This initial release does **not** automatically reject requests, publish notices
 
 The new route uses the same three server-only variables as the existing assistant: `FIREBASE_PROJECT_ID`, `AGENT37_INSTANCE_URL` and `AGENT37_API_KEY`. No new browser key or Firebase Admin service-account key is required. The Agent37 key is never added to `script.js`, `index.html`, or GitHub. `api/agent37-work.js` has the same configured Vercel function-duration ceiling as the existing Agent37 route; the actual maximum is subject to your Vercel plan and function settings.
 
-**Agent37 Personal-plan warning:** the Hackyard instructions you pasted say to use Agent37 Personal at `https://www.agent37.com/personal` and not to add a card or use Cloud API. The public Agent API documentation currently describes `POST https://{instanceId}.agent37.app/v1/responses` with `X-Agent37-Key`; the instance ID alone is not an API credential. It is not confirmed that a Personal Free agent provides the external API key/access needed by this website. Ask a Hackyard host whether your Personal Free instance supports this API and how to obtain the permitted key without entering a card. Do not create a Cloud API instance, add a payment card, buy a plan or top up just to make this feature work when following the challenge's Personal-free instructions. Until Agent37 confirms a supported endpoint and credential, the AI Work UI will show that it is not configured or cannot connect.
+**Agent37 setup:** Follow `agent37/SETUP-GUIDE.md`. This project uses the Cloud API integration route; claim the Hackyard promotional credit first if available, do not add a card or enable auto top-up, and keep the API key only in Vercel environment variables.
 
 ### Deployment notes
 
