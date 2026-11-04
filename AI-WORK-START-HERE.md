@@ -27,3 +27,18 @@ Keep the existing Firebase project configuration. Deploy the included `firestore
 
 ## Operational safety
 Automatic execution means the agent executes only the supported actions after validation. Do not use this for high-impact or legally binding decisions without a human review process and clear institutional policy. Back up Firestore and test with non-production records before enabling it for real student data.
+
+
+## Expanded Agent37 capabilities (this update)
+Staff AI Work now supports application approve/reject plus creating campus clubs (with a linked club channel), events, official notices, and campus/class/subject/hostel/club channels where the signed-in role is permitted. Admins can ask Agent37 to restrict a campus user's NeonVerse access using an exact name or campus ID and a reason. This is a reversible NeonVerse access restriction stored in `userModeration`; it does **not** delete the Firebase Authentication account.
+
+AI Work task history is stored in the `aiWorkHistory` Firestore collection, scoped to the requesting user's own history. The website tour now navigates to each section before displaying its instructions and scrolls the section into view.
+
+### Deploy this update
+1. Replace the website files with this ZIP's files.
+2. Deploy the updated Firestore rules and indexes after reviewing them: `firebase deploy --only firestore:rules,firestore:indexes`.
+3. Keep `FIREBASE_PROJECT_ID`, `AGENT37_INSTANCE_URL`, and `AGENT37_API_KEY` configured as Vercel server-side environment variables, then redeploy Vercel.
+4. Test with non-production campus records and separate student, faculty, warden and admin accounts.
+
+### Important limits
+This is a multi-action campus assistant, not unrestricted superuser access. It does not permanently delete Firebase Auth users, alter roles, bypass campus isolation, or execute arbitrary Firestore writes. Those operations need a separately secured Firebase Admin SDK backend, explicit institution policy, and stronger approvals. Unsupported tasks are reported as unsupported rather than falsely marked complete.

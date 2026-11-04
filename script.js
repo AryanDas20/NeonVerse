@@ -420,7 +420,7 @@ let aiWorkPlan = null, aiWorkBusy = false;
 function renderAiWorkPlan(plan) {
   const actions = Array.isArray(plan?.actions) ? plan.actions : [];
   const skipped = Array.isArray(plan?.skipped) ? plan.skipped : [];
-  const rows = actions.map(a => `<tr><td><b>${esc(a.title || a.type || a.action)}</b></td><td>${esc(a.action.replaceAll("_", " "))}</td><td>${esc(a.studentName || "Your account")}</td></tr>`).join("");
+  const rows = actions.map(a => `<tr><td><b>${esc(a.title || a.name || a.type || a.action)}</b></td><td>${esc(a.action.replaceAll("_", " "))}</td><td>${esc(a.studentName || "Your account")}</td></tr>`).join("");
   const skippedRows = skipped.map(x => `<div class="ai-work-skipped-row"><span>${esc(x.applicationId || "Item")}</span><small>${esc(x.reason || "Not actioned")}</small></div>`).join("");
   const result = $("ai-work-result"); if (!result) return;
   result.classList.remove("hidden");
@@ -430,12 +430,23 @@ async function renderAiWork() {
   aiWorkPlan = null;
   const staff = ["warden", "faculty", "admin"].includes(currentProfile?.role);
   $("page-content").innerHTML = pageHeading("AGENT37 · AUTONOMOUS ASSISTANT", "AI Work", staff ? "Give your campus assistant a task. Supported actions execute automatically within your staff permissions." : "Ask NeonVerse AI to prepare and submit requests for your own student account.") +
-    `<div class="ai-work-layout"><section class="panel ai-work-compose-panel"><div class="ai-work-intro"><div class="ai-work-symbol">✦</div><div><h2>What should I do?</h2><p>${staff ? "Write the task naturally. The agent will act on matching pending campus applications." : "Ask to submit a leave request, maintenance report or other campus service application."}</p></div></div>
-      <div class="ai-work-chips">${staff ? `<button type="button" class="ai-work-chip" data-ai-example="Approve all pending leave applications for my campus.">Approve pending leave</button><button type="button" class="ai-work-chip" data-ai-example="Reject duplicate pending applications and explain the reason in the review note.">Reject duplicates</button><button type="button" class="ai-work-chip" data-ai-example="Summarise all pending applications without changing anything.">Summarise queue</button>` : `<button type="button" class="ai-work-chip" data-ai-example="Submit a hostel leave application for tomorrow because I need to visit home.">Apply for leave</button><button type="button" class="ai-work-chip" data-ai-example="Submit a maintenance request: the fan in my room is not working.">Report maintenance</button>`}</div>
+    `<div class="ai-work-layout"><section class="panel ai-work-compose-panel"><div class="ai-work-intro"><div class="ai-work-symbol">✦</div><div><h2>What should I do?</h2><p>${staff ? "Write the task naturally. The agent can manage supported campus operations, create campus resources and process application workflows." : "Ask to submit a leave request, maintenance report or other campus service application."}</p></div></div>
+      <div class="ai-work-chips">${staff ? `<button type="button" class="ai-work-chip" data-ai-example="Approve all pending leave applications for my campus.">Approve pending leave</button><button type="button" class="ai-work-chip" data-ai-example="Reject duplicate pending applications and explain the reason in the review note.">Reject duplicates</button><button type="button" class="ai-work-chip" data-ai-example="Summarise all pending applications without changing anything.">Summarise queue</button><button type="button" class="ai-work-chip" data-ai-example="Create a technical club named AI Innovators with a short description and an open membership.">Create club</button><button type="button" class="ai-work-chip" data-ai-example="Create a campus event named Innovation Day next Friday at the main auditorium. Ask me for missing date details if needed.">Create event</button><button type="button" class="ai-work-chip" data-ai-example="Publish an official notice reminding students to complete their registration.">Publish notice</button><button type="button" class="ai-work-chip" data-ai-example="Create a campus-wide chat channel named Student Help Desk.">Create chat group</button>${currentProfile.role==="admin" ? '<button type="button" class="ai-work-chip" data-ai-example="Restrict campus access for the user with campus ID 12345 because of the documented policy violation: [reason].">Restrict user access</button>' : ""}` : `<button type="button" class="ai-work-chip" data-ai-example="Submit a hostel leave application for tomorrow because I need to visit home.">Apply for leave</button><button type="button" class="ai-work-chip" data-ai-example="Submit a maintenance request: the fan in my room is not working.">Report maintenance</button>`}</div>
       <form id="ai-work-form"><label for="ai-work-input">Your instruction</label><textarea id="ai-work-input" rows="5" maxlength="1600" placeholder="${staff ? "Example: Approve all pending leave applications for my campus." : "Example: Apply for hostel leave this Friday to visit home."}" required></textarea><div class="ai-work-form-foot"><small>Agent actions are limited by your signed-in account and Firestore permissions. Each action is recorded.</small><button class="btn btn-primary" id="ai-work-submit" type="submit">✦ Run with Agent37</button></div></form><div id="ai-work-status" class="ai-work-status" aria-live="polite">Ready · ${staff ? "Staff" : "Student"} access verified</div></section>
-    <aside class="panel ai-work-policy-panel"><div class="page-kicker">AUTOMATION & SAFEGUARDS</div><h3>What happens automatically</h3><div class="ai-work-policy-item"><span>✓</span><div><b>Instruction-led</b><small>No hard-coded three-day leave limit. The staff instruction and campus procedures guide the decision.</small></div></div><div class="ai-work-policy-item"><span>✓</span><div><b>Role and campus permissions</b><small>Staff can act only on records their role may review. Students can create requests only for themselves.</small></div></div><div class="ai-work-policy-item"><span>✓</span><div><b>Automatic execution</b><small>Supported actions run immediately after validation; no second confirmation screen.</small></div></div><div class="ai-work-policy-item"><span>✓</span><div><b>Audit and notifications</b><small>Application decisions record reviewer, timestamp and note. Students are notified after decisions.</small></div></div><p class="ai-work-policy-note">AI cannot bypass account permissions, campus isolation, consent, or Firestore security rules. Unsupported actions are reported rather than falsely marked complete.</p></aside></div><section id="ai-work-result" class="panel ai-work-result hidden" aria-live="polite"></section>`;
+    <aside class="panel ai-work-policy-panel"><div class="page-kicker">AUTOMATION & SAFEGUARDS</div><h3>What happens automatically</h3><div class="ai-work-policy-item"><span>✓</span><div><b>Instruction-led</b><small>No hard-coded three-day leave limit. The staff instruction and campus procedures guide the decision.</small></div></div><div class="ai-work-policy-item"><span>✓</span><div><b>Role and campus permissions</b><small>Staff can act only on records their role may review. Students can create requests only for themselves.</small></div></div><div class="ai-work-policy-item"><span>✓</span><div><b>Validated execution</b><small>Supported low-risk actions run after validation. Destructive changes are guarded and permission-checked.</small></div></div><div class="ai-work-policy-item"><span>✓</span><div><b>Audit and notifications</b><small>Application decisions record reviewer, timestamp and note. Students are notified after decisions.</small></div></div><p class="ai-work-policy-note">AI cannot bypass account permissions, campus isolation, consent, or Firestore security rules. Unsupported actions are reported rather than falsely marked complete.</p></aside></div><section id="ai-work-result" class="panel ai-work-result hidden" aria-live="polite"></section><section class="panel ai-work-history-panel"><div class="panel-title"><h3>AI Work history</h3><button class="btn btn-ghost btn-small" id="refresh-ai-history">Refresh</button></div><div id="ai-work-history"><p class="text-muted">Loading task history…</p></div></section>`;
   $("ai-work-form").addEventListener("submit", generateAiWorkPlan);
-  document.querySelectorAll("[data-ai-example]").forEach(b => b.addEventListener("click", () => { $("ai-work-input").value = b.dataset.aiExample || ""; $("ai-work-input").focus(); }));
+  document.querySelectorAll("[data-ai-example]").forEach(b => b.addEventListener("click", () => { $("ai-work-input").value = b.dataset.aiExample || ""; $("ai-work-input").focus(); })); $("refresh-ai-history").onclick=loadAiWorkHistory; await loadAiWorkHistory();
+}
+async function loadAiWorkHistory() {
+  const host=$("ai-work-history"); if(!host)return;
+  try {
+    const snap=await getDocs(query(collection(db,"aiWorkHistory"),where("actorUid","==",currentUser.uid),orderBy("createdAt","desc"),limit(25)));
+    const rows=snap.docs.map(d=>({id:d.id,...d.data()}));
+    host.innerHTML=rows.length?rows.map(r=>`<article class="ai-work-history-row"><div><b>${esc(r.instruction||"Campus task")}</b><small>${esc(r.summary||"")}</small><small>${esc(r.status||"completed")} · ${esc(dateText(r.createdAt))} · ${Number(r.completedCount||0)} action(s)</small></div><span class="status ${r.status==="completed"?"approved":"pending"}">${esc(r.status||"logged")}</span></article>`).join(""):`<p class="text-muted">No AI Work tasks have been recorded yet.</p>`;
+  } catch(error) { host.innerHTML=`<p class="text-muted">History could not be loaded: ${esc(friendlyAuthError(error))}</p>`; }
+}
+async function recordAiWorkHistory(instruction,report) {
+  try { await addDoc(collection(db,"aiWorkHistory"),{actorUid:currentUser.uid,actorName:currentProfile.name||"Staff",role:currentProfile.role,universityKey:currentProfile.universityKey,instruction:String(instruction||"").slice(0,1600),summary:String(report.summary||"").slice(0,900),status:report.status||"completed",completedCount:Number(report.completedCount||0),actions:(report.actions||[]).slice(0,20).map(a=>({action:a.action,title:a.title||a.name||a.action})),createdAt:serverTimestamp()}); } catch(error) { console.warn("AI Work history could not be recorded",error); }
 }
 async function generateAiWorkPlan(event) {
   event?.preventDefault?.(); if (aiWorkBusy) return;
@@ -463,8 +474,10 @@ async function generateAiWorkPlan(event) {
     if (status) status.textContent = "Agent37 completed its reasoning. Executing authorised actions…";
     const completed = await executeAiWorkPlan();
     const report = {...aiWorkPlan,completedCount:completed,note:`Finished automatically · ${completed} action(s) completed. Any unsupported or failed action is listed below.`};
-    renderAiWorkPlan(report); if (status) status.textContent = `Completed · ${completed} action(s) executed`;
+    renderAiWorkPlan(report); await recordAiWorkHistory(instruction,{...report,status:"completed"}); await loadAiWorkHistory(); if (status) status.textContent = `Completed · ${completed} action(s) executed`;
   } catch (error) {
+    await recordAiWorkHistory(instruction,{summary:error?.message||"Task failed",completedCount:0,status:"failed",actions:[]});
+    await loadAiWorkHistory();
     if (status) status.textContent = "Could not complete this task.";
     if (resultBox) { resultBox.classList.remove("hidden"); resultBox.innerHTML = `<div class="ai-work-error"><b>AI Work could not complete this request</b><p>${esc(error?.message || "Please try again.")}</p></div>`; }
   } finally { aiWorkBusy = false; if (submit) { submit.disabled = false; submit.textContent = "✦ Run with Agent37"; } }
@@ -493,7 +506,45 @@ async function executeAiWorkPlan() {
         try { await addNotification(app.studentUid,{title:`Application ${status}`,body:`${app.title||app.type||"Your application"}: ${comment}`,type:"application",fromUid:currentUser.uid}); } catch (e) { console.warn("Application saved; notification failed",e); }
         completed++; continue;
       }
-      skipped.push({applicationId:action.applicationId||action.title||"Action",reason:"This action is not supported for your account or in this release."});
+      if (staff && action.action === "create_club") {
+        if (!["admin","faculty","warden"].includes(currentProfile.role)) throw new Error("Your role cannot create clubs.");
+        const name=String(action.name||action.title||"").trim(); if(!name)throw new Error("Club name is required.");
+        const club=await addDoc(collection(db,"clubs"),{name,category:String(action.category||"Other"),description:String(action.description||""),openToJoin:true,universityKey:currentProfile.universityKey,createdBy:currentUser.uid,coordinatorName:currentProfile.name,createdAt:serverTimestamp()});
+        const channel=await addDoc(collection(db,"channels"),{title:name,kind:"club",clubId:club.id,description:String(action.description||""),universityKey:currentProfile.universityKey,createdByUid:currentUser.uid,createdByName:currentProfile.name,createdAt:serverTimestamp()});
+        await setDoc(doc(db,"channelMemberships",`${channel.id}_${currentUser.uid}`),{channelId:channel.id,userUid:currentUser.uid,campusKey:currentProfile.universityKey,status:"active",createdAt:serverTimestamp()});
+        completed++; continue;
+      }
+      if (staff && action.action === "create_event") {
+        if (!["admin","faculty","warden"].includes(currentProfile.role)) throw new Error("Your role cannot publish events.");
+        const title=String(action.title||action.name||"").trim(),date=String(action.date||"").trim(); if(!title||!/^\\d{4}-\\d{2}-\\d{2}$/.test(date))throw new Error("Event title and a valid YYYY-MM-DD date are required.");
+        await addDoc(collection(db,"events"),{title,date,time:String(action.time||""),venue:String(action.venue||""),category:String(action.category||"University"),description:String(action.description||action.content||""),universityKey:currentProfile.universityKey,createdBy:currentUser.uid,createdAt:serverTimestamp()}); completed++; continue;
+      }
+      if (staff && action.action === "create_notice") {
+        if (!["admin","warden","faculty"].includes(currentProfile.role)) throw new Error("Your role cannot publish official notices.");
+        const title=String(action.title||action.name||"").trim(),content=String(action.content||action.description||"").trim(); if(!title||!content)throw new Error("Notice title and content are required.");
+        await addDoc(collection(db,"notices"),{title,content,body:content,university:currentProfile.university,universityKey:currentProfile.universityKey,authorUid:currentUser.uid,authorName:currentProfile.name,createdAt:serverTimestamp(),updatedAt:serverTimestamp()}); completed++; continue;
+      }
+      if (staff && ["create_channel","create_group_chat"].includes(action.action)) {
+        const title=String(action.title||action.name||"").trim(); if(!title)throw new Error("Chat group name is required.");
+        const kind=String(action.kind||"campus").toLowerCase();
+        if(!["class","subject","hostel","campus","club"].includes(kind))throw new Error("Unsupported chat group type.");
+        if(kind==="campus" && currentProfile.role!=="admin")throw new Error("Only campus administrators can create campus-wide channels.");
+        if(!["admin","faculty","warden"].includes(currentProfile.role))throw new Error("Staff access required.");
+        const channel=await addDoc(collection(db,"channels"),{title,kind,description:String(action.description||""),enrollmentMode:"manual",universityKey:currentProfile.universityKey,createdByUid:currentUser.uid,createdByName:currentProfile.name,createdAt:serverTimestamp()});
+        await setDoc(doc(db,"channelMemberships",`${channel.id}_${currentUser.uid}`),{channelId:channel.id,userUid:currentUser.uid,campusKey:currentProfile.universityKey,status:"active",createdAt:serverTimestamp()}); completed++; continue;
+      }
+      if (staff && action.action === "restrict_user") {
+        if(currentProfile.role!=="admin")throw new Error("Only a campus administrator can restrict accounts.");
+        const target=String(action.targetName||action.name||"").trim(); if(!target)throw new Error("Provide the exact user's name or campus ID.");
+        const people=await getAllCampusProfilesForStaff();
+        const matches=people.map(d=>({uid:d.id,...d.data()})).filter(p=>normaliseSearch(p.name)===normaliseSearch(target)||normaliseSearch(p.collegeId)===normaliseSearch(target));
+        if(matches.length!==1)throw new Error(matches.length?"More than one user matches. Use the exact campus ID.":"No matching campus user was found.");
+        const person=matches[0]; if(person.uid===currentUser.uid)throw new Error("You cannot restrict your own administrator account.");
+        if(!confirm(`Restrict NeonVerse access for ${person.name||target}? This does not delete their Firebase account and can be reversed by an administrator.`)){skipped.push({applicationId:target,reason:"Admin cancelled the account restriction."});continue;}
+        await setDoc(doc(db,"userModeration",person.uid),{userUid:person.uid,userName:person.name||"Campus member",universityKey:currentProfile.universityKey,status:"banned",banType:"permanent",expiresAt:null,reason:String(action.reason||"Access restricted by campus administrator through AI Work.").slice(0,400),updatedBy:currentUser.uid,updatedAt:serverTimestamp()});
+        completed++; continue;
+      }
+      skipped.push({applicationId:action.applicationId||action.title||action.name||"Action",reason:"This action is not enabled or permitted for your account. Permanent Firebase Auth deletion and role changes require a separately secured Firebase Admin SDK service."});
     } catch (error) { skipped.push({applicationId:action.applicationId||action.title||"Action",reason:error?.message||"Execution failed"}); }
   }
   if (aiWorkPlan) aiWorkPlan.skipped = skipped;
@@ -1237,12 +1288,25 @@ async function openNotifications() {
 }
 
 const tour = [
-  ["Your overview","Your dashboard shows profile completion, campus status, applications and role-specific shortcuts."],
-  ["Academic & hostel life","Assignments, attendance, timetable, leave requests and hostel service workflows live in one place."],
-  ["Campus community","Use staff-approved chat, class and subject channels, clubs and events."],
-  ["Your campus workspace","Explore official notices, casual campus posts, office calendar, your profile and settings."]
+  ["Your overview","overview","Your dashboard shows campus status, application counts and role-specific shortcuts."],
+  ["Applications","applications","Review requests, check statuses and follow application history."],
+  ["Messages & groups","messages","Open direct messages and campus conversations."],
+  ["Student directory","directory","Find verified members of your campus."],
+  ["Notice board","notices","Read official campus announcements and notices."],
+  ["Academics","academics","Explore assignments, attendance and academic calendar tools."],
+  ["Hostel services","hostel","Manage hostel requests and services available to your role."],
+  ["Events & clubs","events","Discover clubs, create societies (staff) and manage campus events."],
+  ["AI Work","ai-work","Give Agent37 multi-step campus tasks and review its execution history."],
+  ["Profile & settings","settings","Manage your profile, preferences and restart this guided tour."]
 ];
-function showTour() { const item=tour[tourIndex];$("tour-step").textContent=`0${tourIndex+1} / 0${tour.length}`;$("tour-title").textContent=item[0];$("tour-copy").textContent=item[1];$("tour-overlay").classList.remove("hidden");$("tour-next").textContent=tourIndex===tour.length-1?"Finish ✓":"Next →"; }
+async function showTour() {
+  const item=tour[tourIndex]; $("tour-step").textContent=`${String(tourIndex+1).padStart(2,"0")} / ${String(tour.length).padStart(2,"0")}`;
+  $("tour-title").textContent=item[0]; $("tour-copy").textContent=item[2]; $("tour-overlay").classList.remove("hidden");
+  $("tour-next").textContent=tourIndex===tour.length-1?"Finish ✓":"Next →";
+  if(currentPage!==item[1]) await renderPage(item[1]);
+  const target=document.querySelector("#page-content");
+  if(target) { target.scrollIntoView({behavior:"smooth",block:"start"}); target.classList.add("tour-page-focus"); setTimeout(()=>target.classList.remove("tour-page-focus"),1200); }
+}
 function maybeTour() { if(!localStorage.getItem("neonverse-tour-done")){tourIndex=0;showTour();} }
 async function globalSearch() {
   if(!isProfileComplete(currentProfile))return openProfileCompletion(true);
@@ -1451,7 +1515,7 @@ $("warden-mode").onclick=()=>{roleMode=!roleMode;$("warden-box").classList.toggl
 $("signout").onclick=doSignout;$("notification-button").onclick=openNotifications;$("global-search").onclick=globalSearch;$("app-menu").onclick=()=>{$("sidebar").classList.toggle("open");$("sidebar-scrim").classList.toggle("show");};$("sidebar-scrim").onclick=closeSidebar;
 $("user-chip").onclick=()=>renderPage("profile");$("nav-back").onclick=goBack;
 $("modal-close").onclick=()=>closeModal();$("modal-backdrop").onclick=event=>{if(event.target===$("modal-backdrop"))closeModal();};
-$("tour-next").onclick=()=>{if(tourIndex<tour.length-1){tourIndex++;showTour();}else{$("tour-overlay").classList.add("hidden");localStorage.setItem("neonverse-tour-done","1");toast("You're ready to explore NeonVerse.");}};
+$("tour-next").onclick=async()=>{if(tourIndex<tour.length-1){tourIndex++;await showTour();}else{$("tour-overlay").classList.add("hidden");localStorage.setItem("neonverse-tour-done","1");toast("You're ready to explore NeonVerse.");}};
 $("tour-skip").onclick=()=>{$("tour-overlay").classList.add("hidden");localStorage.setItem("neonverse-tour-done","1");};
 document.addEventListener("keydown",event=>{if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==="k"){event.preventDefault();if(currentUser)globalSearch();}if(event.key==="Escape"){if(!lockedModal)closeModal();$("tour-overlay").classList.add("hidden");closeSidebar();}});
 loadTheme();

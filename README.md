@@ -376,3 +376,7 @@ The current package adds campus-scoped admin message moderation (archive/restore
 ## AI Work implementation and first-time setup
 
 See [`AI-WORK-START-HERE.md`](AI-WORK-START-HERE.md) for the step-by-step deployment, Firestore Rules publication, Agent37 Personal-plan credential check, Vercel environment variables and safe test procedure.
+
+
+### Agent37 AI Work (expanded)
+Staff can use natural language for application decisions and supported campus creation tasks (clubs, events, notices and role-permitted chat channels). Administrators can issue reversible campus access restrictions for a uniquely identified user. AI Work logs the request and execution summary in `aiWorkHistory`. It does not permanently delete Firebase Auth accounts or change roles.
