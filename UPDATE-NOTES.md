@@ -63,3 +63,15 @@ This revision builds on the Green/Pink edition and adds:
 - Added `vercel.json` with a 300-second function duration and `.env.example` with placeholders only.
 - The assistant is read-only and is not connected to Firestore records or university ERP data. It cannot perform approvals, deletions, role changes or other privileged actions.
 - The widget remains unconfigured until Vercel environment variables are supplied. The official Agent API sample uses `X-Agent37-Key` at `/v1/responses`; an instance ID alone is not enough.
+
+## NeonVerse usability and Agent37 navigation update — 7 November 2026
+
+- Expanded the Overview with direct shortcuts and plain-language explanations of applications, messaging, academics, notices and campus activity.
+- Changed staff pending-application loading to fetch all pages (500 records per page) for both campus-key and legacy campus-name queries and documented the campus/status checks to use when a request is missing.
+- Added role-aware help text to the Applications area, distinguishing student submission/tracking from staff review and decision workflows.
+- Added a Notice Board guide explaining official announcements versus community posts, and an Academic Planner guide explaining assignments, attendance and calendar responsibilities.
+- Clarified the administrator messaging state: campus moderation is read-only for conversations where the admin is not a participant; administrators can use New chat / New group to initiate conversations and channels for campus-wide communication. This preserves participant privacy and existing Firestore rules.
+- Expanded Agent37's natural-language help with a role-aware map of website sections and added a safe `navigate_page` action so students and staff can ask AI Work to open permitted sections.
+- AI navigation is allow-listed by role. It does not grant new database permissions, bypass Firestore Rules, or perform arbitrary operations.
+
+Validation: `node --check` passed for `script.js` and `api/agent37-work.js`; Firebase JSON files parse. Live Firebase rules, data, AI provider configuration, Vercel deployment and multi-account workflows were not available for end-to-end testing.

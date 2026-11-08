@@ -13,7 +13,7 @@
   <script type="module" src="script.js"></script>
 </head>
 <body>
-  <div class="ambient ambient-one"></div><div class="ambient ambient-two"></div>
+  <div class="ambient ambient-one"></div><div class="ambient ambient-two"></div><div class="ambient ambient-three"></div>
   <div id="toast-root" aria-live="polite"></div>
 
   <main id="landing" class="landing">
@@ -127,20 +127,20 @@
     <section id="agent37-panel" class="agent37-panel hidden" aria-label="NeonVerse AI assistant" aria-modal="false">
       <header class="agent37-header">
         <div class="agent37-brand-mark" aria-hidden="true">✦</div>
-        <div class="agent37-header-copy"><b>NeonVerse AI</b><small><span class="agent37-status-dot"></span> Powered by Agent37 · Website help</small></div>
+        <div class="agent37-header-copy"><b>NeonVerse AI</b><small><span class="agent37-status-dot"></span> Agent37 · Role-aware campus copilot</small></div>
         <button id="agent37-new-chat" class="agent37-head-btn" type="button" title="Start a new conversation" aria-label="Start a new conversation">↻</button>
         <button id="agent37-close" class="agent37-head-btn" type="button" title="Close assistant" aria-label="Close assistant">×</button>
       </header>
-      <div class="agent37-notice">I can guide you around NeonVerse. I cannot see private records or perform approvals, deletions or other account actions.</div>
+      <div class="agent37-notice"><b>Ask. Navigate. Get things done.</b><span>I can explain the live website and run supported actions within your signed-in role. Sensitive or unsupported operations stay protected.</span></div>
       <div id="agent37-messages" class="agent37-messages" role="log" aria-live="polite" aria-relevant="additions text"></div>
       <div id="agent37-quick-prompts" class="agent37-quick-prompts">
-        <button type="button" data-agent37-prompt="How do I submit a hostel leave application?">Apply for leave</button>
-        <button type="button" data-agent37-prompt="How can I request to join a club?">Join a club</button>
-        <button type="button" data-agent37-prompt="How do I use the website as an administrator?">Admin help</button>
+        <button type="button" data-agent37-prompt="Open my applications and explain how to track a request.">My applications</button>
+        <button type="button" data-agent37-prompt="Open the academic planner and explain its features.">Academic planner</button>
+        <button type="button" data-agent37-prompt="Explain the main features available to my role in detail.">Explain my workspace</button>
       </div>
       <form id="agent37-form" class="agent37-compose">
         <label class="sr-only" for="agent37-input">Ask NeonVerse AI</label>
-        <textarea id="agent37-input" rows="1" maxlength="2500" placeholder="Ask how to use NeonVerse…" required></textarea>
+        <textarea id="agent37-input" rows="1" maxlength="1600" placeholder="Ask AI to open a page, explain a feature or do a task…" required></textarea>
         <button id="agent37-send" type="submit" aria-label="Send message">↑</button>
       </form>
       <div class="agent37-footer">AI can make mistakes. Confirm official university policies with staff.</div>

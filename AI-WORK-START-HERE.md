@@ -42,3 +42,9 @@ AI Work task history is stored in the `aiWorkHistory` Firestore collection, scop
 
 ### Important limits
 This is a multi-action campus assistant, not unrestricted superuser access. It does not permanently delete Firebase Auth users, alter roles, bypass campus isolation, or execute arbitrary Firestore writes. Those operations need a separately secured Firebase Admin SDK backend, explicit institution policy, and stronger approvals. Unsupported tasks are reported as unsupported rather than falsely marked complete.
+
+## Natural-language navigation and help
+
+Agent37 now has a role-aware guide to NeonVerse sections. Students and staff can ask it to explain a feature or open a permitted section, for example: “Open my applications”, “Take me to the academic planner”, or “Where can I see hostel notices?”. Navigation is allow-listed and checked again in the browser. It does not provide unrestricted superuser access or override Firestore permissions.
+
+Staff can continue using the existing supported administrative actions. Student AI can submit requests for the signed-in student only. For unsupported operations, Agent37 should explain the relevant manual workflow rather than claim it completed the work.
