@@ -5,7 +5,7 @@ import {
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
 import {
   getFirestore, doc, getDoc, setDoc, updateDoc, deleteDoc, collection, addDoc, getDocs, getDocsFromServer,
-  query, where, orderBy, limit, startAfter, onSnapshot, serverTimestamp, arrayUnion, getDocFromServer
+  query, where, orderBy, limit, startAfter, onSnapshot, serverTimestamp, arrayUnion, getDocFromServer, runTransaction
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
 import { firebaseConfig } from "./firebase-config.js";
 
@@ -23,11 +23,12 @@ const CAMPUS_ALIASES = {
 const configured = Boolean(firebaseConfig?.apiKey && !firebaseConfig.apiKey.startsWith("PASTE_") &&
   firebaseConfig?.projectId && !firebaseConfig.projectId.startsWith("YOUR_"));
 let auth, db, currentUser = null, currentProfile = null;
-let authMode = "signin", roleMode = false, activeConversation = null;
+let authMode = "signin", roleMode = false, selectedAuthRole = "student", activeConversation = null;
 let unsubscribeMessages = null, unsubscribeNotifications = null;
 let unsubscribeProfile = null, unsubscribeRole = null;
 let currentPage = "overview", pageHistory = [], tourIndex = 0, lockedModal = false, firstProfileSnapshot = true;
 let conversationCache = [], peopleCache = [], peopleSearchTimer = null;
+let pendingQueueWarning = "";
 // Agent37 evaluation and safety-centre state. Only the signed-in campus admin can view these pages.
 let agent37SafetyUnsubs = [];
 let agent37SafetyState = {applications:[], legacyApplications:[], transfers:[], history:[], moderation:[], evaluationRuns:[], errors:[], loading:[]};
@@ -65,14 +66,27 @@ function initFirebase() {
 const firebaseReady = initFirebase();
 function requireFirebase() { if (!firebaseReady) { toast("Add your Firebase Web configuration in firebase-config.js first."); return false; } return true; }
 
+function setAuthRole(role) {
+  selectedAuthRole=["student","admin","warden","faculty"].includes(role)?role:"student";
+  roleMode=selectedAuthRole!=="student";
+  document.querySelectorAll("[data-login-role]").forEach(button=>{
+    button.classList.toggle("selected",button.dataset.loginRole===selectedAuthRole);
+    button.setAttribute("aria-pressed",button.dataset.loginRole===selectedAuthRole?"true":"false");
+  });
+  const help=$("auth-role-help");
+  if(help) help.textContent=roleMode?`${roleLabel(selectedAuthRole)} access is checked against the university-assigned roles/{uid} record. Selecting a button never grants a role.`:"Student access. Staff roles are provisioned by the university and cannot be self-selected.";
+  if(authMode==="signin") $("auth-sub").textContent=`Sign in to the ${roleLabel(selectedAuthRole).toLowerCase()} workspace.`;
+}
 function setAuthMode(mode) {
-  authMode = mode;
-  document.querySelectorAll(".auth-tab").forEach(button => button.classList.toggle("active", button.dataset.authMode === mode));
-  $("signup-extra").classList.toggle("hidden", mode !== "signup");
-  $("auth-title").innerHTML = mode === "signup" ? 'Create your<br><span class="gradient-text">campus identity.</span>' : 'Sign in to<br><span class="gradient-text">your universe.</span>';
-  $("auth-sub").textContent = mode === "signup" ? "Create your student account to join a campus community." : "Continue with your university account.";
-  $("auth-submit").innerHTML = mode === "signup" ? "Create account <span>↗</span>" : "Sign in <span>↗</span>";
-  $("auth-password").autocomplete = mode === "signup" ? "new-password" : "current-password";
+  authMode=mode;
+  document.querySelectorAll(".auth-tab").forEach(button=>button.classList.toggle("active",button.dataset.authMode===mode));
+  $("signup-extra").classList.toggle("hidden",mode!=="signup");
+  if(mode==="signup") setAuthRole("student");
+  document.querySelectorAll("[data-login-role]").forEach(button=>button.disabled=mode==="signup"&&button.dataset.loginRole!=="student");
+  $("auth-title").innerHTML=mode==="signup"?'Create your<br><span class="gradient-text">campus identity.</span>':'Sign in to<br><span class="gradient-text">your universe.</span>';
+  $("auth-sub").textContent=mode==="signup"?"Create your student account. Staff accounts must be authorised by the university.":`Sign in to the ${roleLabel(selectedAuthRole).toLowerCase()} workspace.`;
+  $("auth-submit").innerHTML=mode==="signup"?"Create account <span>↗</span>":"Sign in <span>↗</span>";
+  $("auth-password").autocomplete=mode==="signup"?"new-password":"current-password";
   clearAuthError();
 }
 function friendlyAuthError(error) {
@@ -212,27 +226,25 @@ async function finishLogin(user, extra = {}) {
     toast(friendlyAuthError(error));
   }
 }
+function isStaffRole(role) { return ["admin","warden","faculty","verifier"].includes(role); }
 function isProfileComplete(profile) {
-  return Boolean(profile?.profileComplete && profile.name?.trim() && profile.university?.trim() &&
-    profile.universityKey && profile.collegeId?.trim() && (profile.degree||profile.department)?.trim() &&
-    profile.course?.trim() && String(profile.year || "").trim());
+  if (!profile?.profileComplete || !profile.name?.trim() || !profile.university?.trim() || !profile.universityKey) return false;
+  if (isStaffRole(profile.role)) return Boolean(profile.employeeId?.trim() && profile.designation?.trim() && profile.department?.trim());
+  return Boolean(profile.collegeId?.trim() && (profile.degree||profile.department)?.trim() && profile.course?.trim() && String(profile.year || "").trim());
 }
 async function syncAssignedStaffProfile() {
-  if (!currentProfile || !currentUser || !isProfileComplete(currentProfile)) return;
-  if (!["warden", "faculty", "admin", "verifier"].includes(currentProfile.role)) return;
-  if (currentProfile.profileRole === currentProfile.role && currentProfile.membershipStatus === "verified") return;
-  await updateDoc(doc(db, "profiles", currentUser.uid), {
-    role: currentProfile.role, membershipStatus: "verified",
-    membershipReviewedBy: currentUser.uid, membershipReviewedAt: serverTimestamp(), updatedAt: serverTimestamp()
-  });
-  currentProfile = {...currentProfile, profileRole: currentProfile.role, membershipStatus: "verified"};
+  // The roles/{uid} document is authoritative. Never let a user-editable
+  // profile write assign or copy a staff role or membership state.
+  if (!currentProfile || !currentUser || !isStaffRole(currentProfile.role)) return;
+  currentProfile = {...currentProfile, profileRole:currentProfile.profileRole || "student"};
 }
 function profileCompletionPercent(profile) {
   if (profile?.profileComplete === true) return 100;
   // Progress begins at 0% for a newly registered account; the required
   // campus-details form is the profile-update workflow, not sign-up metadata.
-  const fields = [profile?.collegeId, profile?.degree||profile?.department, profile?.course, profile?.year,
-    profile?.phone, profile?.hostel, profile?.room, profile?.bio];
+  const fields = isStaffRole(profile?.role)
+    ? [profile?.employeeId, profile?.designation, profile?.department, profile?.phone, profile?.bio]
+    : [profile?.collegeId, profile?.degree||profile?.department, profile?.course, profile?.year, profile?.phone, profile?.hostel, profile?.room, profile?.bio];
   return Math.min(99, Math.round(fields.filter(value => String(value || "").trim()).length / fields.length * 100));
 }
 async function handleEmailAuth(event) {
@@ -260,10 +272,8 @@ async function handleEmailAuth(event) {
         await signOut(auth);
         throw new Error("Please verify your email first. We sent a fresh verification link. Check your inbox or spam folder.");
       }
-      if (roleMode) {
-        const role = await getRole(credential.user.uid);
-        if (!["warden", "admin", "faculty", "verifier"].includes(role)) { await signOut(auth); throw new Error("This account is not authorised for staff access. Contact your university administrator."); }
-      }
+      const assignedRole=await getRole(credential.user.uid);
+      if(assignedRole!==selectedAuthRole){await signOut(auth);throw new Error(`This account is assigned the ${roleLabel(assignedRole)} role, not ${roleLabel(selectedAuthRole)}. Select the matching account type or contact your university administrator.`);}
       await finishLogin(credential.user);
     }
   } catch (error) { setAuthError(friendlyAuthError(error)); }
@@ -276,10 +286,8 @@ async function googleLogin() {
     const provider = new GoogleAuthProvider(); provider.setCustomParameters({prompt:"select_account"});
     const result = await signInWithPopup(auth, provider);
     if (!result.user.emailVerified) { await signOut(auth); throw new Error("This Google account does not report a verified email address. Use a verified email account."); }
-    if (roleMode) {
-      const role = await getRole(result.user.uid);
-      if (!["warden", "admin", "faculty", "verifier"].includes(role)) { await signOut(auth); throw new Error("This Google account is not authorised for staff access."); }
-    }
+    const assignedRole=await getRole(result.user.uid);
+    if(assignedRole!==selectedAuthRole){await signOut(auth);throw new Error(`This Google account is assigned the ${roleLabel(assignedRole)} role, not ${roleLabel(selectedAuthRole)}. Select the matching account type.`);}
     await finishLogin(result.user);
   } catch (error) { setAuthError(friendlyAuthError(error)); }
 }
@@ -303,21 +311,16 @@ function openProfileCompletion(force = false) {
       <div class="field full"><label>Full name *</label><input name="name" required value="${esc(p.name)}"></div>
       <div class="field"><label>University full name *</label><input name="university" required value="${esc(p.university)}" placeholder="e.g. Lovely Professional University"></div>
       <div class="field"><label>College short name *</label><input name="universityShortName" required value="${esc(p.universityShortName||"")}" placeholder="e.g. LPU"></div>
-      <div class="field"><label>Registration / college ID *</label><input name="collegeId" required value="${esc(p.collegeId)}" autocomplete="off"></div>
       <div class="field"><label>Phone number</label><input name="phone" type="tel" value="${esc(p.phone)}" autocomplete="tel"></div>
-      <div class="field"><label>Degree / programme *</label><input name="degree" required value="${esc(p.degree||p.department)}" placeholder="e.g. B.Tech Computer Science"></div>
-      <div class="field"><label>Course / programme *</label><input name="course" required value="${esc(p.course)}"></div>
-      <div class="field"><label>Year of study *</label><select name="year" required><option value="">Select year</option>${[1,2,3,4,5,6].map(n=>`<option value="${n}" ${String(p.year)===String(n)?"selected":""}>Year ${n}</option>`).join("")}</select></div>
-      <div class="field"><label>Hostel</label><input name="hostel" value="${esc(p.hostel)}"></div>
-      <div class="field"><label>Room</label><input name="room" value="${esc(p.room)}"></div>
-      <div class="field full"><label>Short bio</label><textarea name="bio" rows="3">${esc(p.bio)}</textarea></div>
+      ${isStaffRole(currentProfile?.role) ? `<div class="field"><label>Employee / staff ID *</label><input name="employeeId" required value="${esc(p.employeeId||"")}"></div><div class="field"><label>Designation *</label><input name="designation" required value="${esc(p.designation||"")}" placeholder="e.g. Warden / Assistant Professor"></div><div class="field"><label>Department / office *</label><input name="department" required value="${esc(p.department||"")}"></div><div class="field"><label>Office / hostel block</label><input name="staffUnit" value="${esc(p.staffUnit||"")}"></div><div class="field full"><label>Professional bio</label><textarea name="bio" rows="3">${esc(p.bio||"")}</textarea></div>` : `<div class="field"><label>Registration / college ID *</label><input name="collegeId" required value="${esc(p.collegeId)}" autocomplete="off"></div><div class="field"><label>Degree / programme *</label><input name="degree" required value="${esc(p.degree||p.department)}" placeholder="e.g. B.Tech Computer Science"></div><div class="field"><label>Course / programme *</label><input name="course" required value="${esc(p.course)}"></div><div class="field"><label>Year of study *</label><select name="year" required><option value="">Select year</option>${[1,2,3,4,5,6].map(n=>`<option value="${n}" ${String(p.year)===String(n)?"selected":""}>Year ${n}</option>`).join("")}</select></div><div class="field"><label>Hostel</label><input name="hostel" value="${esc(p.hostel)}"></div><div class="field"><label>Room</label><input name="room" value="${esc(p.room)}"></div><div class="field full"><label>Short bio</label><textarea name="bio" rows="3">${esc(p.bio)}</textarea></div>`}
       <div class="field full"><button class="btn btn-primary btn-block" type="submit">Save and unlock workspace ↗</button></div>
     </form>`, {locked:force});
   $("complete-profile").onsubmit = async event => {
     event.preventDefault();
     const form = Object.fromEntries(new FormData(event.currentTarget));
     const campus = String(form.university || "").trim();
-    const required = [form.name, campus, form.collegeId, form.degree, form.course, form.year];
+    const staffProfile = isStaffRole(currentProfile?.role);
+    const required = staffProfile ? [form.name,campus,form.employeeId,form.designation,form.department] : [form.name,campus,form.collegeId,form.degree,form.course,form.year];
     if (required.some(value => !String(value || "").trim())) { toast("Complete every field marked with *."); return; }
     const existingKey = currentProfile.universityKey || "";
     const newKey = campusKeyFor(campus);
@@ -325,11 +328,15 @@ function openProfileCompletion(force = false) {
       toast("Use Request campus change in your profile to move to another university community."); return;
     }
     try {
-      await updateDoc(doc(db, "profiles", currentUser.uid), {
-        ...form, department:String(form.degree||"").trim(), degree:String(form.degree||"").trim(), degreeKey:normaliseSearch(form.degree), courseKey:normaliseSearch(form.course), hostelKey:normaliseSearch(form.hostel), year:Number(form.year), university:campus, universityShortName:String(form.universityShortName||"").trim(), universityKey:newKey,
+      const profileUpdate = {
+        name:String(form.name).trim(), phone:String(form.phone||"").trim(), bio:String(form.bio||"").trim(),
+        university:campus, universityShortName:String(form.universityShortName||"").trim(), universityKey:newKey,
         email:currentUser.email || currentProfile.email || "", emailVerified:Boolean(currentUser.emailVerified), profileComplete:true, updatedAt:serverTimestamp()
-      });
-      currentProfile = {...currentProfile, ...form, department:String(form.degree||"").trim(), degree:String(form.degree||"").trim(), degreeKey:normaliseSearch(form.degree), courseKey:normaliseSearch(form.course), hostelKey:normaliseSearch(form.hostel), year:Number(form.year), university:campus, universityShortName:String(form.universityShortName||"").trim(), universityKey:newKey, profileComplete:true};
+      };
+      if (staffProfile) Object.assign(profileUpdate,{employeeId:String(form.employeeId).trim(),designation:String(form.designation).trim(),department:String(form.department).trim(),staffUnit:String(form.staffUnit||"").trim()});
+      else Object.assign(profileUpdate,{collegeId:String(form.collegeId).trim(),department:String(form.degree||"").trim(),degree:String(form.degree||"").trim(),degreeKey:normaliseSearch(form.degree),course:String(form.course).trim(),courseKey:normaliseSearch(form.course),hostel:String(form.hostel||"").trim(),hostelKey:normaliseSearch(form.hostel),room:String(form.room||"").trim(),year:Number(form.year)});
+      await updateDoc(doc(db, "profiles", currentUser.uid), profileUpdate);
+      currentProfile = {...currentProfile, ...profileUpdate};
       await syncAssignedStaffProfile();
       closeModal(true); await loadWorkspace(); maybeTour(); toast("Your campus profile is complete.");
     } catch (error) { toast("Could not save profile: " + friendlyAuthError(error)); }
@@ -420,28 +427,35 @@ async function getMyApplications() {
   const snap = await getDocs(q); return snap.docs.map(item => ({id:item.id,...item.data()}));
 }
 async function getPendingApplications() {
-  // Read every page of the campus-scoped pending queue. Firestore Rules
-  // still enforce the campus boundary; the legacy query supports older records.
+  // Read current and legacy campus queues independently. A failure in one
+  // schema must not hide the records returned by the other schema.
+  pendingQueueWarning = "";
   async function readAll(baseConstraints) {
-    const records = [];
-    let cursor = null;
-    while (true) {
-      const pageQuery = query(collection(db,"applications"), ...baseConstraints, limit(500), ...(cursor ? [startAfter(cursor)] : []));
-      const page = await getDocsFromServer(pageQuery);
-      records.push(...page.docs);
-      if (page.docs.length < 500) break;
-      cursor = page.docs[page.docs.length - 1];
+    const records=[]; let cursor=null;
+    while(true) {
+      const pageQuery=query(collection(db,"applications"),...baseConstraints,limit(500),...(cursor?[startAfter(cursor)]:[]));
+      const page=await getDocsFromServer(pageQuery); records.push(...page.docs);
+      if(page.docs.length<500) break;
+      cursor=page.docs[page.docs.length-1];
     }
     return records;
   }
-  const [currentDocs, legacyDocs] = await Promise.all([
+  const results=await Promise.allSettled([
     readAll([where("universityKey","==",currentProfile.universityKey),where("status","==","pending")]),
     readAll([where("university","==",currentProfile.university),where("status","==","pending")])
   ]);
-  const merged = new Map();
-  [...currentDocs,...legacyDocs].forEach(item=>merged.set(item.id,{id:item.id,...item.data()}));
+  const successful=results.filter(r=>r.status==="fulfilled");
+  if(!successful.length) throw results[0].reason || results[1].reason || new Error("The campus approval queue could not be read.");
+  if(successful.length!==2) {
+    const failed=results.find(r=>r.status==="rejected");
+    pendingQueueWarning=`Some older or newer application records could not be loaded: ${friendlyAuthError(failed.reason)}. The displayed queue may be incomplete.`;
+    console.warn("Partial pending application queue",failed.reason);
+  }
+  const merged=new Map();
+  successful.flatMap(r=>r.value).forEach(item=>merged.set(item.id,{id:item.id,...item.data()}));
   return [...merged.values()].sort((a,b)=>(b.createdAt?.seconds||0)-(a.createdAt?.seconds||0));
 }
+
 // Agent37 AI Work: autonomous execution of explicitly requested, allow-listed actions.
 // The model never receives credentials. Firestore Rules remain the final authority.
 let aiWorkPlan = null, aiWorkBusy = false;
@@ -965,6 +979,10 @@ async function submitApplication(event) {
     if (!(end > start)) return toast("Return date and time must be after departure.");
   }
   try {
+    const existing=await getMyApplications();
+    const duplicate=existing.find(item=>item.status==="pending" && normaliseSearch(item.type)===normaliseSearch(data.type) &&
+      normaliseSearch(item.title)===normaliseSearch(data.title) && String(item.fromDate||"")===String(data.fromDate||"") && String(item.toDate||"")===String(data.toDate||""));
+    if(duplicate) throw new Error(`A matching request is already pending (reference ${duplicate.id}). Open Applications to review or edit it instead of submitting another copy.`);
     await addDoc(collection(db,"applications"), {...data, studentUid:currentUser.uid, studentName:currentProfile.name,
       university:currentProfile.university, universityKey:currentProfile.universityKey, status:"pending",
       createdAt:serverTimestamp(), updatedAt:serverTimestamp(), history:[{status:"pending",by:currentUser.uid,actorName:currentProfile.name||"Student",actorEmail:currentUser.email||"",actorRole:currentProfile.role,decision:"approval-required",at:new Date().toISOString(),comment:"Application submitted"}]});
@@ -975,7 +993,7 @@ async function renderApplications() {
   const staff = isStaff();
   const [applications, transfers] = await Promise.all([staff ? getPendingApplications() : getMyApplications(), canVerifyStudents() ? getCampusTransferRequests() : Promise.resolve([])]);
   $("page-content").innerHTML = pageHeading("REQUEST CENTRE", "Applications", "One place for leave, hostel, visitor, maintenance and academic requests, with status tracking, review notes and decision history.", !staff ? '<button class="btn btn-primary btn-small" id="new-app">＋ New application</button>' : "") +
-    `${staff ? `<div class="panel approval-help"><div class="panel-title"><h3>Staff approval queue</h3><span class="page-kicker">${esc(roleLabel(currentProfile.role))} · ${applications.length} PENDING LOADED</span></div><p class="text-muted">This queue is campus-scoped. Open Review to inspect the student's details, dates, supporting explanation and history before approving, rejecting or escalating. Every decision is recorded against your staff account and the student is notified.</p><p class="text-muted">If a student's request is missing, verify that the student profile and application both use the same university/campus key as your staff profile, that the request status is pending, and that the latest Firestore rules and required indexes are published. The queue is paginated so older pending requests are not silently hidden by a small result limit.</p></div>` : `<div class="panel application-help"><b>How requests work</b><p class="text-muted">Choose a request type, explain the reason and provide dates or other required details. Your request is saved as Pending until an authorised staff member reviews it. You can track decisions here and edit or cancel eligible pending requests.</p></div>`}<div class="panel"><div class="toolbar"><input class="search-input" id="app-filter" placeholder="Search applications…"><select class="select-small" id="status-filter"><option value="">All statuses</option><option>pending</option><option>approved</option><option>rejected</option><option>escalated</option><option>cancelled</option></select></div>
+    `${staff ? `<div class="panel approval-help"><div class="panel-title"><h3>Staff approval queue</h3><span class="page-kicker">${esc(roleLabel(currentProfile.role))} · ${applications.length} PENDING LOADED</span></div><p class="text-muted">This queue is campus-scoped. Open Review to inspect the student's details, dates, supporting explanation and history before approving, rejecting or escalating. Every decision is recorded against your staff account and the student is notified.</p>${pendingQueueWarning?`<p class="agent37-inline-warning">${esc(pendingQueueWarning)}</p>`:""}<p class="text-muted">If a student's request is missing, verify that the student profile and application both use the same university/campus key as your staff profile, that the request status is pending, and that the latest Firestore rules and required indexes are published. The queue is paginated so older pending requests are not silently hidden by a small result limit.</p></div>` : `<div class="panel application-help"><b>How requests work</b><p class="text-muted">Choose a request type, explain the reason and provide dates or other required details. Your request is saved as Pending until an authorised staff member reviews it. You can track decisions here and edit or cancel eligible pending requests.</p></div>`}<div class="panel"><div class="toolbar"><input class="search-input" id="app-filter" placeholder="Search applications…"><select class="select-small" id="status-filter"><option value="">All statuses</option><option>pending</option><option>approved</option><option>rejected</option><option>escalated</option><option>cancelled</option></select></div>
     <div id="application-list">${applications.length ? `<div class="table-wrap"><table class="data-table"><thead><tr><th>REQUEST</th><th>${staff?"STUDENT":"SUBMITTED"}</th><th>STATUS</th><th>ACTION</th></tr></thead><tbody>${applications.map(app=>`<tr data-search="${esc(normaliseSearch(`${app.title||""} ${app.studentName||""} ${app.type||""}`))}" data-status="${esc(app.status)}"><td><b>${esc(app.title||app.type)}</b><div class="text-muted">${esc(app.type||"")}</div></td><td>${esc(staff?app.studentName:dateText(app.createdAt))}</td><td><span class="status ${esc(app.status)}">${esc(app.status)}</span></td><td><button class="subtle-link" data-review="${esc(app.id)}">${staff?"Review":"Details"} →</button></td></tr>`).join("")}</tbody></table></div>` : empty("▤", "No applications found", "New requests and reviews will appear here.")}</div></div>` +
     (canVerifyStudents() ? `<div class="panel" style="margin-top:16px"><div class="panel-title"><h3>Campus change requests</h3><span class="page-kicker">DESTINATION CAMPUS</span></div>${transfers.length ? transfers.map(request=>`<div class="application-row"><div class="row-main"><b>${esc(request.studentName||"Student")}</b><small>${esc(request.currentUniversity||"Current campus")} → ${esc(request.requestedUniversity||"")}</small></div><button class="btn btn-primary btn-small" data-campus-request="${esc(request.id)}">Review</button></div>`).join("") : empty("⇄","No pending campus transfers","Requests to join this campus will appear here for authorised staff review.")}</div>` : "");
   if ($("new-app")) $("new-app").onclick = openApplicationForm;
@@ -988,8 +1006,11 @@ function filterApplications() {
   document.querySelectorAll("#application-list tbody tr").forEach(row => { row.style.display = (row.dataset.search.includes(term) && (!status || row.dataset.status === status)) ? "" : "none"; });
 }
 async function openApplicationReview(id) {
-  const snap = await getDoc(doc(db,"applications",id)); if (!snap.exists()) return toast("Application not found.");
-  const application = snap.data(), canReview = isStaff() && application.status === "pending";
+  const snap = await getDocFromServer(doc(db,"applications",id)); if (!snap.exists()) return toast("Application not found.");
+  const application = snap.data();
+  const applicationCampus = application.universityKey || campusKeyFor(application.university || "");
+  const canReview = canVerifyStudents() && application.status === "pending" && applicationCampus === currentProfile.universityKey;
+  if (isStaff() && applicationCampus !== currentProfile.universityKey) return toast("This request belongs to a different campus and cannot be reviewed here.");
   openModal(`<span class="eyebrow">APPLICATION DETAILS</span><h2>${esc(application.title||application.type)}</h2><p>${esc(application.studentName||"Student")} · ${esc(application.type)} · <span class="status ${esc(application.status)}">${esc(application.status)}</span></p>
     <div class="content-card"><p><b>Reason</b><br>${esc(application.details)}</p><p><b>Dates & timings</b><br>${esc(application.fromDate||"Not specified")} ${application.fromTime?`at ${esc(application.fromTime)}`:""} — ${esc(application.toDate||"Not specified")} ${application.toTime?`at ${esc(application.toTime)}`:""}</p><p><b>Supporting reference</b><br>${esc(application.documentNote||"None supplied")}</p><p><b>Reviewer comment</b><br>${esc(application.reviewComment||"No comment yet")}</p></div>
     ${canReview?`<div class="field" style="margin-top:15px"><label>Reviewer comment</label><textarea id="review-comment" placeholder="Add a reason or note…"></textarea></div><div class="chat-tools"><button class="btn btn-primary" id="approve-app">Approve</button><button class="btn btn-ghost" id="reject-app">Reject</button><button class="btn btn-ghost" id="escalate-app">Escalate</button></div>`:
@@ -997,11 +1018,28 @@ async function openApplicationReview(id) {
   if (canReview) ["approve","reject","escalate"].forEach(action => $(`${action}-app`).onclick = () => updateApplicationStatus(id,action,$("review-comment").value));
   if ($("cancel-app")) $("cancel-app").onclick = () => cancelApplication(id);
 }
-async function updateApplicationStatus(id, status, comment) {
+async function updateApplicationStatus(id, action, comment) {
+  if (!canVerifyStudents()) return toast("Your assigned role cannot review campus applications.");
+  const statusByAction={approve:"approved",reject:"rejected",escalate:"escalated",approved:"approved",rejected:"rejected",escalated:"escalated"};
+  const status=statusByAction[action];
+  if(!status) return toast("Unknown application decision.");
   try {
-    const ref = doc(db,"applications",id), snap = await getDoc(ref); if (!snap.exists()) throw new Error("Application no longer exists.");
-    const app = snap.data();
-    await updateDoc(ref,{status,reviewComment:comment||"",reviewedBy:currentUser.uid,updatedAt:serverTimestamp(),history:[...(app.history||[]),{status,by:currentUser.uid,actorName:currentProfile.name||"Staff",actorEmail:currentUser.email||"",actorRole:currentProfile.role,decision:status,at:new Date().toISOString(),comment:comment||""}]});
+    const ref=doc(db,"applications",id); let app=null;
+    // The transaction re-reads the live status and prevents two reviewers
+    // from making conflicting decisions on the same pending request.
+    await runTransaction(db,async transaction=>{
+      const snap=await transaction.get(ref);
+      if(!snap.exists()) throw new Error("Application no longer exists.");
+      app=snap.data();
+      const campus=app.universityKey || campusKeyFor(app.university || "");
+      if(campus!==currentProfile.universityKey) throw new Error("This request belongs to a different campus.");
+      if(app.status!=="pending") throw new Error(`This application is already ${app.status||"processed"}. Refresh the queue before taking another action.`);
+      const history=[...(Array.isArray(app.history)?app.history:[]),{
+        status,by:currentUser.uid,actorName:currentProfile.name||"Staff",actorEmail:currentUser.email||"",
+        actorRole:currentProfile.role,decision:status,at:new Date().toISOString(),comment:comment||""
+      }];
+      transaction.update(ref,{status,reviewComment:comment||"",reviewedBy:currentUser.uid,updatedAt:serverTimestamp(),history});
+    });
     await addNotification(app.studentUid,{title:`Application ${status}`,body:`${app.title||app.type}: ${comment||`Your request was ${status}.`}`,type:"application",fromUid:currentUser.uid});
     closeModal(); toast(`Application ${status}.`); await renderPage("applications");
   } catch (error) { toast("Could not update application: " + friendlyAuthError(error)); }
@@ -1193,12 +1231,13 @@ async function renderMessages() {
   }
   const activeId = activeConversation?.id;
   activeConversation = activeId ? conversationCache.find(item => item.id === activeId) || activeConversation : null;
-  $("page-content").innerHTML = pageHeading("CAMPUS COMMUNITY","Messages","Private one-to-one and group conversations within your current campus. Start a new direct chat or group to message members; campus-wide review tools are separate from participant messaging.", `<div class="chat-tools"><button class="btn btn-ghost btn-small" id="new-chat">＋ New chat</button><button class="btn btn-primary btn-small" id="new-group">＋ New group</button></div>`) +
-    `<div class="chat-layout ${activeConversation?"chat-open":""}" id="chat-layout"><aside class="panel chat-list"><h3>${currentProfile.role==="admin"?"Campus conversations":"Conversations"}</h3>${currentProfile.role==="admin"?`<p class="text-muted">Administrator moderation view · ${conversationCache.length} recent campus conversations</p>`:""}<div class="field"><input id="conversation-filter" placeholder="Search your chats…" aria-label="Search conversations"></div><div id="conversation-list" class="chat-contact-list">${renderConversationList()}</div>
+  $("page-content").innerHTML = pageHeading("CAMPUS COMMUNITY","Messages","Private one-to-one and group conversations within your current campus. Staff can use campus channels to send announcements to a whole campus without entering private conversations.", `<div class="chat-tools"><button class="btn btn-ghost btn-small" id="open-campus-channels">▣ Campus channels</button><button class="btn btn-ghost btn-small" id="new-chat">＋ New chat</button><button class="btn btn-primary btn-small" id="new-group">＋ New group</button></div>`) +
+    `<div class="chat-layout ${activeConversation?"chat-open":""}" id="chat-layout"><aside class="panel chat-list"><h3>${currentProfile.role==="admin"?"Campus conversations":"Conversations"}</h3>${currentProfile.role==="admin"?`<p class="text-muted">Campus moderation view · ${conversationCache.length} recent conversations. Private chats remain writable only by their participants. Use Campus channels to post to groups or the whole university.</p>`:""}<div class="field"><input id="conversation-filter" placeholder="Search your chats…" aria-label="Search conversations"></div><div id="conversation-list" class="chat-contact-list">${renderConversationList()}</div>
       <div class="nav-divider"></div><h3>Start a conversation</h3><div class="field"><input id="chat-new-search" placeholder="Search campus users…" autocomplete="off" aria-label="Find a campus user"></div><div id="chat-search-results" class="chat-search-results"><div class="chat-empty">Search by name, email, phone or registration ID. Students are not listed here until you start a chat.</div></div></aside>
       <section class="panel chat-window"><div class="chat-window-head" id="chat-head">${activeConversation?renderChatHeader(activeConversation):`<div><b>Select a conversation</b><div class="text-muted">Choose an existing chat or search for a student to begin.</div></div>`}</div>
       <div class="chat-messages" id="chat-messages">${activeConversation?`<div class="chat-placeholder">Loading conversation…</div>`:empty("✉","Your messages","Your conversation history will appear here.")}</div>
       ${activeConversation?`<div class="field" style="padding:0 10px"><input id="message-filter" placeholder="Search messages in this conversation…" aria-label="Search messages"></div>${activeConversation.participants?.includes(currentUser.uid)?`<form class="chat-compose" id="chat-compose"><input id="chat-text" placeholder="Write a message…" maxlength="4000" autocomplete="off" required><button class="btn btn-primary btn-small" type="submit">Send ↗</button></form>`:`<div class="chat-compose"><span class="text-muted">You are viewing this conversation as a moderator, not a participant. Use New chat or New group to message campus members; moderation actions remain available here.</span></div>`}`:""}</section></div>`;
+  $("open-campus-channels").onclick = () => renderPage("channels");
   $("new-chat").onclick = () => { $("chat-new-search").focus(); toast("Search for a campus member to start a private conversation."); };
   $("new-group").onclick = openCreateGroup;
   $("conversation-filter").oninput = () => { const term = normaliseSearch($("conversation-filter").value); document.querySelectorAll("[data-conversation]").forEach(el => el.style.display = normaliseSearch(el.textContent).includes(term) ? "" : "none"); };
@@ -1442,21 +1481,28 @@ async function deleteGroup() {
 
 async function renderNotices() {
   if (!communityVerified()) { $("page-content").innerHTML = pageHeading("CAMPUS BULLETIN","Notice board","A searchable campus information hub: official circulars, deadlines, hostel updates, emergency information and student community posts.") + `<div class="panel">${empty("◷","Campus verification pending","Notices and community posts become available after your campus membership is approved.")}</div>`; return; }
-  const [noticeSnap,communitySnap]=await Promise.all([
+  const boardResults=await Promise.allSettled([
     getDocs(query(collection(db,"notices"),where("universityKey","==",currentProfile.universityKey),limit(80))),
     getDocs(query(collection(db,"communityPosts"),where("universityKey","==",currentProfile.universityKey),limit(80)))
   ]);
+  const boardWarning=boardResults.some(result=>result.status==="rejected")
+    ? "One notice source could not be loaded. Available records remain visible; refresh or check the latest Firestore rules if a board is missing."
+    : "";
+  if(boardResults.every(result=>result.status==="rejected")) throw boardResults[0].reason || boardResults[1].reason;
+  const noticeSnap=boardResults[0].status==="fulfilled"?boardResults[0].value:{docs:[]};
+  const communitySnap=boardResults[1].status==="fulfilled"?boardResults[1].value:{docs:[]};
   const notices=noticeSnap.docs.map(d=>({id:d.id,...d.data(),board:"official"})).sort((a,b)=>(b.createdAt?.seconds||0)-(a.createdAt?.seconds||0));
   const community=communitySnap.docs.map(d=>({id:d.id,...d.data(),board:"casual"})).sort((a,b)=>(b.createdAt?.seconds||0)-(a.createdAt?.seconds||0));
   const canPost=["admin","faculty","warden"].includes(currentProfile.role);
-  const casualRows=community.map(post=>`<div class="notice-row"><div class="notice-date">${esc(dateText(post.createdAt))}</div><div style="flex:1"><b>${esc(post.title)}</b><p>${esc(post.body)}</p><span class="page-kicker">${esc(post.authorName||"Campus member")} · CASUAL</span></div>${post.authorUid===currentUser.uid||currentProfile.role==="admin"?`<button class="subtle-link" data-delete-community="${esc(post.id)}">Remove</button>`:""}</div>`).join("");
-  const officialRows=notices.map(notice=>`<div class="notice-row"><div class="notice-date">${esc(dateText(notice.createdAt))}</div><div style="flex:1"><b>${esc(notice.title)}</b><p>${esc(notice.body)}</p><span class="page-kicker">${esc(notice.category||"ANNOUNCEMENT")} · OFFICIAL</span></div>${notice.authorUid===currentUser.uid||currentProfile.role==="admin"?`<button class="subtle-link" data-delete-notice="${esc(notice.id)}">Remove</button>`:""}</div>`).join("");
+  const casualRows=community.map(post=>`<div class="notice-row" data-notice-search="${esc(normaliseSearch([post.title,post.body,post.authorName,"casual"].join(" ")))}"><div class="notice-date">${esc(dateText(post.createdAt))}</div><div style="flex:1"><b>${esc(post.title)}</b><p>${esc(post.body)}</p><span class="page-kicker">${esc(post.authorName||"Campus member")} · CASUAL</span></div>${post.authorUid===currentUser.uid||currentProfile.role==="admin"?`<button class="subtle-link" data-delete-community="${esc(post.id)}">Remove</button>`:""}</div>`).join("");
+  const officialRows=notices.map(notice=>`<div class="notice-row" data-notice-search="${esc(normaliseSearch([notice.title,notice.body,notice.category,notice.priority,notice.authorName,"official"].join(" ")))}"><div class="notice-date">${esc(dateText(notice.createdAt))}</div><div style="flex:1"><b>${esc(notice.title)}</b><p>${esc(notice.body)}</p><span class="page-kicker">${esc(notice.category||"ANNOUNCEMENT")} · ${esc(notice.priority||"NORMAL")} · OFFICIAL</span></div>${notice.authorUid===currentUser.uid||currentProfile.role==="admin"?`<button class="subtle-link" data-delete-notice="${esc(notice.id)}">Remove</button>`:""}</div>`).join("");
   $("page-content").innerHTML=`<section class="panel" style="margin-bottom:14px"><div class="panel-title"><h3>Notice board guide</h3><span class="page-kicker">OFFICIAL INFORMATION & COMMUNITY</span></div><p class="text-muted">Official notices are institution-facing announcements such as academic deadlines, exam updates, hostel instructions, policy changes and emergency information. Community posts are student-shared updates such as club activities and lost-and-found notices. Check the author and date, and use the institution's official emergency channels for urgent incidents. Staff publishing permissions depend on role.</p></section>`+pageHeading("CAMPUS BULLETIN","Notice board","Official university updates alongside a casual student community board.",`<button class="btn btn-ghost btn-small" id="casual-post">＋ Casual post</button>${canPost?'<button class="btn btn-primary btn-small" id="post-notice">＋ Official notice</button>':""}`)+
-    `<div class="panel" style="margin-bottom:14px"><div class="panel-title"><h3>Official notice board</h3><span class="page-kicker">WARDEN · FACULTY · UNIVERSITY OFFICE</span></div>${officialRows||empty("◷","No official announcements","Academic, hostel, event and emergency notices appear here.")}</div><div class="panel"><div class="panel-title"><h3>Casual campus board</h3><span class="page-kicker">COMMUNITY UPDATES</span></div>${casualRows||empty("✳","No casual posts yet","Students can share non-sensitive campus updates, lost-and-found notes and club announcements.")}</div>`;
-  if(canPost)$("post-notice").onclick=()=>{openModal(`<span class="eyebrow">OFFICIAL BULLETIN</span><h2>Publish a notice</h2><form id="notice-form"><div class="field"><label>Title</label><input name="title" required maxlength="120"></div><div class="field"><label>Category</label><select name="category"><option>Announcement</option><option>Academic</option><option>Hostel</option><option>Event</option><option>Emergency</option></select></div><div class="field"><label>Message</label><textarea name="body" required maxlength="5000"></textarea></div><button class="btn btn-primary btn-block">Publish notice</button></form>`);$("notice-form").onsubmit=async e=>{e.preventDefault();const data=Object.fromEntries(new FormData(e.currentTarget));try{await addDoc(collection(db,"notices"),{...data,university:currentProfile.university,universityKey:currentProfile.universityKey,authorUid:currentUser.uid,createdAt:serverTimestamp()});closeModal();toast("Official notice published.");await renderPage("notices",false);}catch(err){toast("Could not publish: "+friendlyAuthError(err));}};};
+    `<div class="panel" style="margin-bottom:14px"><div class="toolbar"><input class="search-input" id="notice-search" placeholder="Search notices, categories and authors…" aria-label="Search campus notices"><span class="page-kicker">${notices.length} OFFICIAL · ${community.length} COMMUNITY</span></div>${boardWarning?`<p class="agent37-inline-warning">${esc(boardWarning)}</p>`:""}<div class="panel-title"><h3>Official notice board</h3><span class="page-kicker">WARDEN · FACULTY · UNIVERSITY OFFICE</span></div>${officialRows||empty("◷","No official announcements","Academic, hostel, event and emergency notices appear here.")}</div><div class="panel"><div class="panel-title"><h3>Casual campus board</h3><span class="page-kicker">COMMUNITY UPDATES</span></div>${casualRows||empty("✳","No casual posts yet","Students can share non-sensitive campus updates, lost-and-found notes and club announcements.")}</div>`;
+  if(canPost)$("post-notice").onclick=()=>{openModal(`<span class="eyebrow">OFFICIAL BULLETIN</span><h2>Publish a notice</h2><form id="notice-form"><div class="field"><label>Title</label><input name="title" required maxlength="120"></div><div class="field"><label>Category</label><select name="category"><option>Announcement</option><option>Academic</option><option>Examination</option><option>Fees & scholarships</option><option>Placement</option><option>Library</option><option>Hostel</option><option>Health</option><option>Event</option><option>Emergency</option></select></div><div class="field"><label>Priority</label><select name="priority"><option value="Normal">Normal</option><option value="Important">Important</option><option value="Urgent">Urgent</option></select></div><div class="field"><label>Message</label><textarea name="body" required maxlength="5000"></textarea></div><button class="btn btn-primary btn-block">Publish notice</button></form>`);$("notice-form").onsubmit=async e=>{e.preventDefault();const data=Object.fromEntries(new FormData(e.currentTarget));try{await addDoc(collection(db,"notices"),{...data,university:currentProfile.university,universityKey:currentProfile.universityKey,authorUid:currentUser.uid,createdAt:serverTimestamp()});closeModal();toast("Official notice published.");await renderPage("notices",false);}catch(err){toast("Could not publish: "+friendlyAuthError(err));}};};
   $("casual-post").onclick=()=>{openModal(`<span class="eyebrow">COMMUNITY BOARD</span><h2>Share a casual campus post</h2><p>Do not post private student information, sensitive records, accusations or emergency instructions.</p><form id="casual-form"><div class="field"><label>Post title *</label><input name="title" required maxlength="100"></div><div class="field"><label>Message *</label><textarea name="body" required maxlength="1800" rows="4"></textarea></div><button class="btn btn-primary btn-block">Post to campus board</button></form>`);$("casual-form").onsubmit=async e=>{e.preventDefault();const d=Object.fromEntries(new FormData(e.currentTarget));try{await addDoc(collection(db,"communityPosts"),{...d,universityKey:currentProfile.universityKey,authorUid:currentUser.uid,authorName:currentProfile.name,createdAt:serverTimestamp()});closeModal();toast("Campus post published.");await renderPage("notices",false);}catch(err){toast("Could not post: "+friendlyAuthError(err));}};};
   document.querySelectorAll("[data-delete-community]").forEach(b=>b.onclick=async()=>{try{await deleteDoc(doc(db,"communityPosts",b.dataset.deleteCommunity));toast("Post removed.");await renderPage("notices",false);}catch(err){toast("Could not remove post: "+friendlyAuthError(err));}});
   document.querySelectorAll("[data-delete-notice]").forEach(b=>b.onclick=async()=>{try{await deleteDoc(doc(db,"notices",b.dataset.deleteNotice));toast("Notice removed.");await renderPage("notices",false);}catch(err){toast("Could not remove notice: "+friendlyAuthError(err));}});
+  const search=$("notice-search"); if(search) search.oninput=()=>{const term=normaliseSearch(search.value);document.querySelectorAll("[data-notice-search]").forEach(row=>row.classList.toggle("hidden",!row.dataset.noticeSearch.includes(term)));};
 }
 async function renderAcademics() {
   if (!communityVerified()) { $("page-content").innerHTML=pageHeading("ACADEMIC LIFE","Academic planner","Your academic command centre for assignments, coursework, attendance, exams, holidays, timetable entries and important deadlines.")+`<div class="panel">${empty("▦","Verification required","Your campus account must be verified before academic records are available.")}</div>`; return; }
@@ -1619,16 +1665,16 @@ async function renderHostel() {
   document.querySelectorAll("[data-hostel]").forEach(button=>button.onclick=()=>{const index=Number(button.dataset.hostel);if(index===4)return openApplicationForm();const [icon,title] = items[index];openModal(`<span class="eyebrow">HOSTEL SERVICES</span><h2>${esc(title)}</h2><p>Your request will be added to the same campus application queue.</p><form id="hostel-form"><div class="field"><label>Details</label><textarea name="details" required maxlength="4000" rows="4" placeholder="Describe what you need…"></textarea></div><button class="btn btn-primary btn-block">Submit request</button></form>`);$("hostel-form").onsubmit=async event=>{event.preventDefault();const details=new FormData(event.currentTarget).get("details");try{await addDoc(collection(db,"applications"),{type:title,title,details,studentUid:currentUser.uid,studentName:currentProfile.name,university:currentProfile.university,universityKey:currentProfile.universityKey,status:"pending",createdAt:serverTimestamp(),updatedAt:serverTimestamp(),history:[{status:"pending",by:currentUser.uid,at:new Date().toISOString(),comment:"Request submitted"}]});closeModal();toast("Hostel request submitted.");await renderPage("applications");}catch(error){toast("Request failed: "+friendlyAuthError(error));}};});
 }
 function renderProfile() {
-  const p=currentProfile, completion=profileCompletionPercent(p);
-  const verified=p.membershipStatus==="verified";
+  const p=currentProfile, staff=isStaffRole(p.role), completion=profileCompletionPercent(p);
+  const verified=p.membershipStatus==="verified" || staff;
   const role=roleLabel(p.role);
-  const academicLine=[p.degree||p.department,p.course,p.year?`Year ${p.year}`:""].filter(Boolean).join(" · ")||"Academic information not completed";
+  const academicLine=staff ? [p.designation,p.department,p.staffUnit].filter(Boolean).join(" · ") || "Staff information not completed" : [p.degree||p.department,p.course,p.year?`Year ${p.year}`:""].filter(Boolean).join(" · ") || "Academic information not completed";
   $("page-content").innerHTML=pageHeading("YOUR CAMPUS IDENTITY","My profile","Your verified campus identity, academic information and contact details in one place.",'<button class="btn btn-ghost btn-small" id="profile-edit-focus">Edit details ↓</button>')+
     `<div class="profile-hero-card"><div class="profile-hero-orbit profile-hero-orbit-a"></div><div class="profile-hero-orbit profile-hero-orbit-b"></div><div class="profile-hero-content"><div class="profile-avatar profile-avatar-xl">${esc(initials(p.name))}</div><div class="profile-hero-copy"><span class="profile-role-pill">${esc(role)} · NEONVERSE MEMBER</span><h2>${esc(p.name||"Campus member")}</h2><p>${esc(academicLine)}</p><div class="profile-hero-tags"><span>${esc(p.universityShortName||p.university||"University")}</span><span>${verified?"✓ Campus verified":"◷ Verification pending"}</span><span>${currentUser.emailVerified?"✓ Email verified":"Email verification required"}</span></div></div><div class="profile-completion-ring" style="--progress:${completion*3.6}deg"><div><b>${completion}%</b><small>complete</small></div></div></div><div class="profile-hero-footer"><span>Campus identity</span><b>${esc(p.university||"University not set")}</b><span>Member since ${esc(p.createdAt?.toDate?.().toLocaleDateString?.([], {month:"short",year:"numeric"})||"—")}</span></div></div>
-    <div class="profile-metric-grid"><div><span>Registration ID</span><b>${esc(p.collegeId||"Not added")}</b><small>Your university identifier</small></div><div><span>Department</span><b>${esc(p.department||p.degree||"Not added")}</b><small>Academic affiliation</small></div><div><span>Contact</span><b>${esc(p.phone||"Not added")}</b><small>Private profile detail</small></div><div><span>Hostel / room</span><b>${esc([p.hostel,p.room].filter(Boolean).join(" · ")||"Not allocated")}</b><small>Residential details</small></div></div>
-    <div class="profile-layout"><section class="panel profile-edit-panel" id="profile-edit-panel"><div class="panel-title"><div><span class="page-kicker">IDENTITY SETTINGS</span><h3>Edit your profile</h3><p class="text-muted">Keep your information accurate so campus groups and student services can match your account correctly.</p></div><span class="status ${verified?"approved":"pending"}">${verified?"Verified":"Pending review"}</span></div><form id="profile-edit" class="form-grid"><div class="field"><label>Full name</label><input name="name" value="${esc(p.name)}" required maxlength="100"></div><div class="field"><label>College short name</label><input name="universityShortName" value="${esc(p.universityShortName||"")}" placeholder="e.g. LPU" required></div><div class="field"><label>Registration ID</label><input name="collegeId" value="${esc(p.collegeId)}" required></div><div class="field"><label>Phone</label><input name="phone" type="tel" value="${esc(p.phone)}" autocomplete="tel"></div><div class="field"><label>Degree / programme</label><input name="degree" value="${esc(p.degree||p.department)}" required></div><div class="field"><label>Course / branch</label><input name="course" value="${esc(p.course)}" required></div><div class="field"><label>Year</label><select name="year" required>${[1,2,3,4,5,6].map(n=>`<option value="${n}" ${String(p.year)===String(n)?"selected":""}>Year ${n}</option>`).join("")}</select></div><div class="field"><label>Hostel</label><input name="hostel" value="${esc(p.hostel)}"></div><div class="field"><label>Room</label><input name="room" value="${esc(p.room)}"></div><div class="field full"><label>About me</label><textarea name="bio" rows="4" maxlength="600" placeholder="Share a little about your interests, skills and campus activities…">${esc(p.bio)}</textarea></div><div class="field full"><button class="btn btn-primary">Save profile changes ↗</button></div></form></section>
-    <aside class="profile-side-stack"><section class="panel"><span class="page-kicker">PROFILE STRENGTH</span><h3>${completion>=90?"Looking great!":completion>=65?"Nearly there":"Complete your campus identity"}</h3><p class="text-muted">A complete profile improves student directory quality and academic group matching.</p><div class="profile-progress"><span style="width:${completion}%"></span></div><div class="profile-checklist">${[["Name",!!p.name],["University",!!p.university],["Registration ID",!!p.collegeId],["Programme",!!(p.degree||p.department)],["Course",!!p.course],["Year",!!p.year],["Phone",!!p.phone],["Bio",!!p.bio]].map(([label,ok])=>`<div><span>${ok?"✓":"○"}</span>${label}<b>${ok?"Added":"Missing"}</b></div>`).join("")}</div></section><section class="panel"><span class="page-kicker">CAMPUS MEMBERSHIP</span><h3>${verified?"You're verified":"Waiting for campus verification"}</h3><p class="text-muted">${verified?"Your profile has campus access. Your role determines which administration and student services you can use.":"A Warden, Faculty member or University Administrator must review your profile before restricted campus community features unlock."}</p><div class="profile-security-row"><span>Email status</span><b>${currentUser.emailVerified?"Verified":"Not verified"}</b></div><div class="profile-security-row"><span>Workspace role</span><b>${esc(role)}</b></div><div class="profile-security-row"><span>Campus</span><b>${esc(p.university||"Not set")}</b></div><button class="btn btn-ghost btn-block" id="request-campus-change">Request campus change</button></section></aside></div>`;
-  $("profile-edit").onsubmit=async event=>{event.preventDefault();const data=Object.fromEntries(new FormData(event.currentTarget));data.degree=String(data.degree||"").trim();data.department=data.degree;data.degreeKey=normaliseSearch(data.degree);data.courseKey=normaliseSearch(data.course);data.hostelKey=normaliseSearch(data.hostel);try{await updateDoc(doc(db,"profiles",currentUser.uid),{...data,year:Number(data.year),updatedAt:serverTimestamp()});currentProfile={...currentProfile,...data,year:Number(data.year)};$("top-name").textContent=data.name;$("top-avatar").textContent=initials(data.name);toast("Profile updated.");await renderPage("profile",false);}catch(error){toast("Update failed: "+friendlyAuthError(error));}};
+    <div class="profile-metric-grid">${staff ? `<div><span>Employee ID</span><b>${esc(p.employeeId||"Not added")}</b><small>University staff identifier</small></div><div><span>Designation</span><b>${esc(p.designation||"Not added")}</b><small>Official job title</small></div><div><span>Department / office</span><b>${esc(p.department||"Not added")}</b><small>Assigned unit</small></div><div><span>Contact</span><b>${esc(p.phone||"Not added")}</b><small>Contact detail</small></div>` : `<div><span>Registration ID</span><b>${esc(p.collegeId||"Not added")}</b><small>Your university identifier</small></div><div><span>Department</span><b>${esc(p.department||p.degree||"Not added")}</b><small>Academic affiliation</small></div><div><span>Contact</span><b>${esc(p.phone||"Not added")}</b><small>Private profile detail</small></div><div><span>Hostel / room</span><b>${esc([p.hostel,p.room].filter(Boolean).join(" · ")||"Not allocated")}</b><small>Residential details</small></div>`}</div>
+    <div class="profile-layout"><section class="panel profile-edit-panel" id="profile-edit-panel"><div class="panel-title"><div><span class="page-kicker">IDENTITY SETTINGS</span><h3>Edit your profile</h3><p class="text-muted">Keep your information accurate so campus groups and student services can match your account correctly.</p></div><span class="status ${verified?"approved":"pending"}">${verified?"Verified":"Pending review"}</span></div><form id="profile-edit" class="form-grid"><div class="field"><label>Full name</label><input name="name" value="${esc(p.name)}" required maxlength="100"></div>${staff ? `<div class="field"><label>College short name</label><input name="universityShortName" value="${esc(p.universityShortName||"")}"></div><div class="field"><label>Employee / staff ID</label><input name="employeeId" value="${esc(p.employeeId||"")}" required></div><div class="field"><label>Designation</label><input name="designation" value="${esc(p.designation||"")}" required></div><div class="field"><label>Department / office</label><input name="department" value="${esc(p.department||"")}" required></div><div class="field"><label>Office / hostel block</label><input name="staffUnit" value="${esc(p.staffUnit||"")}"></div><div class="field"><label>Phone</label><input name="phone" type="tel" value="${esc(p.phone||"")}" autocomplete="tel"></div><div class="field full"><label>Professional bio</label><textarea name="bio" rows="4" maxlength="600">${esc(p.bio||"")}</textarea></div>` : `<div class="field"><label>College short name</label><input name="universityShortName" value="${esc(p.universityShortName||"")}" placeholder="e.g. LPU" required></div><div class="field"><label>Registration ID</label><input name="collegeId" value="${esc(p.collegeId)}" required></div><div class="field"><label>Phone</label><input name="phone" type="tel" value="${esc(p.phone)}" autocomplete="tel"></div><div class="field"><label>Degree / programme</label><input name="degree" value="${esc(p.degree||p.department)}" required></div><div class="field"><label>Course / branch</label><input name="course" value="${esc(p.course)}" required></div><div class="field"><label>Year</label><select name="year" required>${[1,2,3,4,5,6].map(n=>`<option value="${n}" ${String(p.year)===String(n)?"selected":""}>Year ${n}</option>`).join("")}</select></div><div class="field"><label>Hostel</label><input name="hostel" value="${esc(p.hostel)}"></div><div class="field"><label>Room</label><input name="room" value="${esc(p.room)}"></div><div class="field full"><label>About me</label><textarea name="bio" rows="4" maxlength="600" placeholder="Share a little about your interests, skills and campus activities…">${esc(p.bio)}</textarea></div>`}<div class="field full"><button class="btn btn-primary">Save profile changes ↗</button></div></form></section>
+    <aside class="profile-side-stack"><section class="panel"><span class="page-kicker">PROFILE STRENGTH</span><h3>${completion>=90?"Looking great!":completion>=65?"Nearly there":"Complete your campus identity"}</h3><p class="text-muted">A complete profile improves student directory quality and academic group matching.</p><div class="profile-progress"><span style="width:${completion}%"></span></div><div class="profile-checklist">${(staff ? [["Name",!!p.name],["University",!!p.university],["Employee ID",!!p.employeeId],["Designation",!!p.designation],["Department",!!p.department],["Phone",!!p.phone],["Bio",!!p.bio]] : [["Name",!!p.name],["University",!!p.university],["Registration ID",!!p.collegeId],["Programme",!!(p.degree||p.department)],["Course",!!p.course],["Year",!!p.year],["Phone",!!p.phone],["Bio",!!p.bio]]).map(([label,ok])=>`<div><span>${ok?"✓":"○"}</span>${label}<b>${ok?"Added":"Missing"}</b></div>`).join("")}</div></section><section class="panel"><span class="page-kicker">CAMPUS MEMBERSHIP</span><h3>${verified?"You're verified":"Waiting for campus verification"}</h3><p class="text-muted">${verified?"Your profile has campus access. Your role determines which administration and student services you can use.":"A Warden, Faculty member or University Administrator must review your profile before restricted campus community features unlock."}</p><div class="profile-security-row"><span>Email status</span><b>${currentUser.emailVerified?"Verified":"Not verified"}</b></div><div class="profile-security-row"><span>Workspace role</span><b>${esc(role)}</b></div><div class="profile-security-row"><span>Campus</span><b>${esc(p.university||"Not set")}</b></div><button class="btn btn-ghost btn-block" id="request-campus-change">Request campus change</button></section></aside></div>`;
+  $("profile-edit").onsubmit=async event=>{event.preventDefault();const data=Object.fromEntries(new FormData(event.currentTarget));const update={name:String(data.name||"").trim(),universityShortName:String(data.universityShortName||"").trim(),phone:String(data.phone||"").trim(),bio:String(data.bio||"").trim(),updatedAt:serverTimestamp()};if(staff)Object.assign(update,{employeeId:String(data.employeeId||"").trim(),designation:String(data.designation||"").trim(),department:String(data.department||"").trim(),staffUnit:String(data.staffUnit||"").trim()});else Object.assign(update,{collegeId:String(data.collegeId||"").trim(),degree:String(data.degree||"").trim(),department:String(data.degree||"").trim(),degreeKey:normaliseSearch(data.degree),course:String(data.course||"").trim(),courseKey:normaliseSearch(data.course),year:Number(data.year),hostel:String(data.hostel||"").trim(),hostelKey:normaliseSearch(data.hostel),room:String(data.room||"").trim()});try{await updateDoc(doc(db,"profiles",currentUser.uid),update);currentProfile={...currentProfile,...update};$("top-name").textContent=data.name;$("top-avatar").textContent=initials(data.name);toast("Profile updated.");await renderPage("profile",false);}catch(error){toast("Update failed: "+friendlyAuthError(error));}};
   $("request-campus-change").onclick=openCampusChangeRequest;
   $("profile-edit-focus").onclick=()=>$("profile-edit-panel")?.scrollIntoView({behavior:"smooth",block:"start"});
 }
@@ -1962,7 +2008,7 @@ $("open-auth").onclick=$("hero-enter").onclick=$("closing-enter").onclick=showAu
 $("back-home").onclick=showLanding;
 document.querySelectorAll("[data-auth-mode]").forEach(button=>button.onclick=()=>setAuthMode(button.dataset.authMode));
 $("auth-form").onsubmit=handleEmailAuth;$("google-signin").onclick=googleLogin;
-$("warden-mode").onclick=()=>{roleMode=!roleMode;$("warden-box").classList.toggle("hidden",!roleMode);$("warden-mode").textContent=roleMode?"Student access":"Staff access";$("auth-sub").textContent=roleMode?"Sign in with your university-authorised Warden, Faculty or Admin account.":"Continue with your university account.";};
+document.querySelectorAll("[data-login-role]").forEach(button=>button.onclick=()=>{if(authMode==="signin")setAuthRole(button.dataset.loginRole);});
 $("signout").onclick=doSignout;$("notification-button").onclick=openNotifications;$("global-search").onclick=globalSearch;$("app-menu").onclick=()=>{$("sidebar").classList.toggle("open");$("sidebar-scrim").classList.toggle("show");};$("sidebar-scrim").onclick=closeSidebar;
 $("user-chip").onclick=()=>renderPage("profile");$("nav-back").onclick=goBack;
 $("modal-close").onclick=()=>closeModal();$("modal-backdrop").onclick=event=>{if(event.target===$("modal-backdrop"))closeModal();};

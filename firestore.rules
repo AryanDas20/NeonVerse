@@ -193,7 +193,7 @@ service cloud.firestore {
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
             'name', 'email', 'emailVerified', 'phone', 'collegeId', 'department', 'degree', 'degreeKey',
             'course', 'courseKey', 'year', 'hostel', 'hostelKey', 'room', 'bio', 'profileComplete', 'universityShortName',
-            'updatedAt'
+            'employeeId', 'designation', 'staffUnit', 'updatedAt'
           ])
         )
         ||

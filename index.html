@@ -83,8 +83,12 @@
       </form>
       <div class="divider-label"><span>OR CONTINUE WITH</span></div>
       <button class="google-btn" id="google-signin"><span class="google-g">G</span> Continue with Google</button>
-      <div class="warden-entry"><span>University staff?</span><button id="warden-mode">Staff access</button></div>
-      <div id="warden-box" class="warden-box hidden"><b style="font-size:11px">Restricted staff workspace</b><br><small>Only university-authorised Warden, Faculty and Admin accounts can enter. A role is assigned to the account UID by the university system administrator in Firebase.</small></div>
+      <div class="auth-role-select"><label>Choose account type</label><div class="auth-role-buttons">
+        <button type="button" class="auth-role-option selected" data-login-role="student" aria-pressed="true">Student</button>
+        <button type="button" class="auth-role-option" data-login-role="admin" aria-pressed="false">Admin</button>
+        <button type="button" class="auth-role-option" data-login-role="warden" aria-pressed="false">Warden</button>
+        <button type="button" class="auth-role-option" data-login-role="faculty" aria-pressed="false">Faculty</button>
+      </div><small id="auth-role-help">Student access. Staff roles are provisioned by the university and cannot be self-selected.</small></div>
       <p class="auth-legal">By continuing, you agree to your institution's acceptable-use and privacy policies.</p>
     </div></div>
   </section>
